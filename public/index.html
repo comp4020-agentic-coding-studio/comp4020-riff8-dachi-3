@@ -5,25 +5,68 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Long Scroll</title>
     <link rel="stylesheet" href="/style.css" />
+    <script type="importmap">
+      { "imports": { "three": "/vendor/three/three.module.js" } }
+    </script>
   </head>
   <body>
     <header class="site-header">
-      <h1>Long Scroll</h1>
-      <p class="tagline">
-        A shared scroll. Everyone who visits can add one stroke to it; nothing on it is ever
-        removed.
+      <div class="title">
+        <h1>Long Scroll</h1>
+        <p class="tagline">
+          A shared handscroll in the mist. Every stroke someone drew stands on it, oldest at the far
+          end; the unpainted end is now. Nothing on it is ever removed.
+        </p>
+      </div>
+      <p class="presence">
+        <span id="live-status" class="live-status">connecting…</span>
+        <span aria-hidden="true">·</span>
+        <span id="here-count">just you</span>
       </p>
-      <p><a href="/readme/">what &ldquo;good&rdquo; means for this</a></p>
-      <p id="live-status" class="live-status" role="status">connecting…</p>
+      <nav><a href="/readme/">what &ldquo;good&rdquo; means for this</a></nav>
     </header>
 
     <main>
       <p id="welcome-back" class="welcome-back" hidden></p>
 
-      <section aria-label="the scroll">
-        <ol id="scroll" class="scroll">
-          <li class="scroll__empty" id="scroll-empty">the scroll is empty &mdash; be the first hand</li>
-        </ol>
+      <section class="stage" aria-label="the scroll">
+        <div class="world" id="world">
+          <canvas
+            id="scene"
+            role="img"
+            aria-label="The scroll in 3D. Its strokes are listed in the text view; the controls below move along it."
+          ></canvas>
+          <div id="hover-card" class="hover-card" aria-hidden="true" hidden></div>
+          <p class="world-hint" id="world-hint" aria-hidden="true">
+            drag or scroll to travel &middot; touch a stroke to hear it
+          </p>
+        </div>
+        <p id="world-fallback" class="world-fallback" hidden>
+          The 3D scroll can&rsquo;t run in this browser, so the scroll is shown as text below.
+        </p>
+
+        <div class="controls" id="controls">
+          <div class="control control--wide" id="position-control">
+            <label for="position">Position along the scroll</label>
+            <input id="position" type="range" min="0" max="1000" step="1" value="1000" />
+          </div>
+          <div class="control-row">
+            <button type="button" id="prev-stroke">Previous stroke</button>
+            <button type="button" id="next-stroke">Next stroke</button>
+            <label class="toggle"><input type="checkbox" id="text-toggle" /> Text view</label>
+          </div>
+        </div>
+
+        <p id="now-at" class="now-at" role="status" aria-live="polite"></p>
+        <p id="room-said" class="visually-hidden" aria-live="polite"></p>
+
+        <section id="text-panel" class="text-panel" aria-labelledby="text-heading" hidden>
+          <h2 id="text-heading">The scroll, as text</h2>
+          <p class="text-panel__hint">Oldest first. Choose a stroke to bring it into view.</p>
+          <ol id="scroll" class="scroll">
+            <li class="scroll__empty" id="scroll-empty">the scroll is empty &mdash; be the first hand</li>
+          </ol>
+        </section>
       </section>
 
       <form id="add-mark-form" aria-label="add your stroke">
@@ -41,30 +84,32 @@
               <button type="button" id="pad-clear">Clear the pad</button>
             </div>
 
-            <fieldset class="shapes">
-              <legend>Stroke</legend>
-              <label id="shape-drawn-label" hidden
-                ><input type="radio" name="shape" value="drawn" /> my drawing</label
-              >
-              <label><input type="radio" name="shape" value="wave" checked /> wave</label>
-              <label><input type="radio" name="shape" value="peak" /> peak</label>
-              <label><input type="radio" name="shape" value="hook" /> hook</label>
-              <label><input type="radio" name="shape" value="loop" /> loop</label>
-              <label><input type="radio" name="shape" value="dot" /> dot</label>
-              <label><input type="radio" name="shape" value="line" /> line</label>
-            </fieldset>
+            <div class="compose__fields">
+              <fieldset class="shapes">
+                <legend>Stroke</legend>
+                <label id="shape-drawn-label" hidden
+                  ><input type="radio" name="shape" value="drawn" /> my drawing</label
+                >
+                <label><input type="radio" name="shape" value="wave" checked /> wave</label>
+                <label><input type="radio" name="shape" value="peak" /> peak</label>
+                <label><input type="radio" name="shape" value="hook" /> hook</label>
+                <label><input type="radio" name="shape" value="loop" /> loop</label>
+                <label><input type="radio" name="shape" value="dot" /> dot</label>
+                <label><input type="radio" name="shape" value="line" /> line</label>
+              </fieldset>
+
+              <div class="palette" role="radiogroup" aria-label="ink colour">
+                <!-- populated by app.js from the same palette the server validates against -->
+              </div>
+
+              <p>
+                <label for="note">a short note (optional)</label>
+                <input id="note" name="note" type="text" maxlength="140" autocomplete="off" />
+              </p>
+
+              <button type="submit">Add to the scroll</button>
+            </div>
           </div>
-
-          <div class="palette" role="radiogroup" aria-label="ink colour">
-            <!-- populated by app.js from the same palette the server validates against -->
-          </div>
-
-          <p>
-            <label for="note">a short note (optional)</label>
-            <input id="note" name="note" type="text" maxlength="140" autocomplete="off" />
-          </p>
-
-          <button type="submit">Add to the scroll</button>
         </fieldset>
         <p id="form-status" role="status" aria-live="polite"></p>
       </form>
@@ -72,9 +117,8 @@
 
     <footer class="site-footer">
       <p>
-        <a href="https://github.com/comp4020-agentic-coding-studio/comp4020-final-dachi"
-          >source</a
-        >
+        <a href="https://github.com/comp4020-agentic-coding-studio/comp4020-final-dachi">source</a>
+        &middot; 3D by <a href="https://threejs.org/">three.js</a>
       </p>
     </footer>
 
