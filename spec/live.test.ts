@@ -168,3 +168,24 @@ it("rate limits a pen that posts faster than any hand draws", async () => {
     w.stream.close();
   }
 });
+
+// Since you were here: a returning browser is told when it was last here,
+// keyed by its secret hand server-side; nobody else's visit is ever exposed.
+it("tells a returning browser when it was last here, and nobody else", async () => {
+  const first = await fetch(at("/api/marks"));
+  expect((await first.json()).lastVisit).toBeNull();
+  const cookie = firstCookie(first)!;
+
+  const second = await fetch(at("/api/marks"), { headers: { cookie } });
+  const { lastVisit: noneYet } = await second.json();
+  expect(noneYet).toBeNull();
+
+  const third = await fetch(at("/api/marks"), { headers: { cookie } });
+  const body = await third.text();
+  const { lastVisit } = JSON.parse(body);
+  expect(Date.parse(lastVisit)).toBeGreaterThan(Date.now() - 60_000);
+  expect(body).not.toContain(cookie.split("=")[1]);
+
+  const stranger = await (await fetch(at("/api/marks"))).json();
+  expect(stranger.lastVisit).toBeNull();
+});

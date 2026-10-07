@@ -30,10 +30,15 @@ const positionInput = $("position");
 const textToggle = $("text-toggle");
 const textPanel = $("text-panel");
 
+// Later features (sound, live pens, living ink) hang off these.
+const hooks = { arrive: [], focus: [], camera: [], pick: [], loaded: [] };
+
 const state = {
   marks: [],
   byId: new Map(),
   you: null,
+  lastVisit: null,
+  sinceMarks: [],
   lay: { positions: [], start: 0, openEnd: 0 },
   scene: null,
   layoutLib: null,
@@ -98,7 +103,8 @@ function listItem(mark) {
   stroke.setAttribute("aria-hidden", "true");
   const text = document.createElement("span");
   text.className = "mark__text";
-  text.textContent = describe(mark);
+  text.textContent = (isNew(mark) ? "new: " : "") + describe(mark);
+  if (isNew(mark)) li.classList.add("mark--since");
   button.append(stroke, text);
   button.addEventListener("click", () => {
     hooks.userMove?.();
@@ -112,16 +118,68 @@ function renderList() {
   scrollList.replaceChildren(...(state.marks.length ? state.marks.map(listItem) : [emptyNotice]));
 }
 
+// --- since you were here --------------------------------------------------
+
+const isNew = (mark) => state.lastVisit !== null && mark.createdAt > state.lastVisit && !isYours(mark);
+
+// "Near yours": within three places of one of your strokes along the scroll.
+function nearYours(mark) {
+  const i = state.marks.indexOf(mark);
+  return state.marks.some((m, j) => isYours(m) && Math.abs(i - j) <= 3);
+}
+
+function sinceText() {
+  if (!state.lastVisit) return "";
+  const fresh = state.sinceMarks;
+  const when = timeLabel(state.lastVisit);
+  if (fresh.length === 0) return `Nothing new since you were last here (${when}).`;
+  const near = fresh.filter(nearYours).length;
+  const n = fresh.length;
+  return (
+    `${n === 1 ? "1 stroke came" : `${n} strokes came`} while you were away (since ${when})` +
+    (near ? `; ${near === 1 ? "1 is" : `${near} are`} near yours.` : ".") +
+    " A red thread on the scroll marks where you left off."
+  );
+}
+
+// Your own old strokes, grown since you last looked.
+function grownText() {
+  if (!state.lastVisit || !state.scene) return "";
+  let branches = 0;
+  for (const mark of state.marks.filter(isYours)) {
+    const before = state.scene.growthOf(mark.id, Date.parse(state.lastVisit));
+    const now = state.scene.growthOf(mark.id);
+    const count = (g) => (g ? g.tendrils.reduce((n, t) => n + 1 + (t.fork ? 1 : 0) + t.blossoms, 0) : 0);
+    branches += Math.max(0, count(now) - count(before));
+  }
+  return branches ? ` Your strokes have put out ${branches} new branches and blossoms since then.` : "";
+}
+
 function renderWelcome() {
   const ownCount = state.marks.filter(isYours).length;
+  const parts = [];
   if (ownCount > 0) {
-    welcomeBack.hidden = false;
-    welcomeBack.textContent =
+    parts.push(
       ownCount === 1
         ? "You've left a mark on this scroll before — it's still there."
-        : `You've left ${ownCount} marks on this scroll before — they're still there.`;
+        : `You've left ${ownCount} marks on this scroll before — they're still there.`,
+    );
   }
+  const since = sinceText();
+  if (since) parts.push(since + grownText());
+  welcomeBack.hidden = parts.length === 0;
+  welcomeBack.textContent = parts.join(" ");
 }
+
+// Open where the visitor left off, the new strokes ahead of them.
+hooks.initialView = () => {
+  if (!state.lastVisit || state.sinceMarks.length === 0) return false;
+  const first = state.marks.indexOf(state.sinceMarks[0]);
+  const x = first > 0 ? (state.lay.positions[first - 1].x + state.lay.positions[first].x) / 2 : state.lay.positions[0].x - 1.5;
+  state.scene.setBoundary(x);
+  state.scene.goTo(x + (state.scene.narrow ? 1 : 2.5), { instant: true });
+  return true;
+};
 
 // --- the scroll's geometry, when the 3D view (or its layout) is loaded ---
 
@@ -236,8 +294,6 @@ function hideCard() {
 
 // --- marks arriving ------------------------------------------------------
 
-// Later features (sound, live pens, living ink) hang off these.
-const hooks = { arrive: [], focus: [], camera: [], pick: [], loaded: [] };
 
 function addMark(mark, { live = true } = {}) {
   if (state.byId.has(mark.id)) return false;
@@ -270,6 +326,7 @@ async function load() {
     state.byId = new Map(data.marks.map((m) => [m.id, m]));
     state.lastVisit = data.lastVisit ?? null;
     state.clockOffset = data.now ? Date.parse(data.now) - Date.now() : 0;
+    state.sinceMarks = state.lastVisit ? data.marks.filter(isNew) : [];
     renderList();
     renderWelcome();
     relayout();
@@ -496,6 +553,7 @@ function showScroll() {
   state.scene.setClockOffset(state.clockOffset ?? 0);
   state.scene.setMarks(state.marks, state.lay);
   hooks.sceneReady?.();
+  renderWelcome();
   if (!openHash() && !hooks.initialView?.()) state.scene.goTo(openingX(), { instant: true });
 }
 

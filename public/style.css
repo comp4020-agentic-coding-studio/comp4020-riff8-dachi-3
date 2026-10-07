@@ -305,9 +305,8 @@ select:hover {
   background: var(--paper-alt);
 }
 
-.mark--since .mark__text::before {
-  content: "new · ";
-  color: var(--seal);
+.mark--since .mark__stroke {
+  box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--seal);
 }
 
 .mark__text {

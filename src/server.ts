@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
-import { addMark, handleFor, listMarks } from "./db.ts";
+import { addMark, handleFor, lastSeen, listMarks, markSeen } from "./db.ts";
 import { validateMark } from "./marks.ts";
 import { renderReadme } from "./readme.ts";
 import { allow, broadcastMark, clientForKey, heartbeat, openStream, penUpdate } from "./live.ts";
@@ -235,13 +235,22 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/api/marks") {
       const { hand, setCookie } = handFor(req);
+      // Only a browser that came back with its cookie has a last visit; a
+      // fresh one isn't recorded until it returns, so cookieless requests
+      // can't grow the table.
+      const returning = !setCookie["set-cookie"];
+      const lastVisit = returning ? lastSeen(hand) : null;
+      if (returning) markSeen(hand);
       res.writeHead(200, { ...setCookie, "content-type": "application/json" });
-      res.end(JSON.stringify({ marks: listMarks(), you: handleFor(hand), now: new Date().toISOString() }));
+      res.end(
+        JSON.stringify({ marks: listMarks(), you: handleFor(hand), now: new Date().toISOString(), lastVisit }),
+      );
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/events") {
       const hand = cookieHand(req);
-      openStream(req, res, url, hand ? handleFor(hand) : null, () => {});
+      // leaving counts as "last here" too, so a long visit ends where it ended
+      openStream(req, res, url, hand ? handleFor(hand) : null, () => hand && markSeen(hand));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/marks") {

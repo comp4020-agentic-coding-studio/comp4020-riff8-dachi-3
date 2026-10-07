@@ -51,6 +51,10 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS last_seen (
+    hand TEXT PRIMARY KEY,
+    seen_at TEXT NOT NULL
+  );
 `);
 
 // Strokes from before paths existed keep their rows untouched: the new
@@ -115,4 +119,20 @@ export function listMarks(): PublicMark[] {
 
 export function listMarksAfter(id: number): PublicMark[] {
   return (selectAfterStmt.all(id) as unknown as Row[]).map(toPublic);
+}
+
+// When a browser last had the scroll open, keyed by its secret hand and only
+// ever told back to that same browser. This table is updated freely; it is
+// not the scroll.
+const getSeenStmt = db.prepare("SELECT seen_at AS seenAt FROM last_seen WHERE hand = ?");
+const putSeenStmt = db.prepare(
+  "INSERT INTO last_seen (hand, seen_at) VALUES (?, ?) ON CONFLICT(hand) DO UPDATE SET seen_at = excluded.seen_at",
+);
+
+export function lastSeen(hand: string): string | null {
+  return (getSeenStmt.get(hand) as { seenAt: string } | undefined)?.seenAt ?? null;
+}
+
+export function markSeen(hand: string): void {
+  putSeenStmt.run(hand, new Date().toISOString());
 }

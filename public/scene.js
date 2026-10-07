@@ -130,22 +130,26 @@ function softDot() {
   return new THREE.CanvasTexture(c);
 }
 
+// A small seal-like label, sized to its text; `aspect` sizes the sprite.
 function labelTexture(text, { color = "#f6efe2", bg = "#a8322a" } = {}) {
   const c = document.createElement("canvas");
-  c.width = 256;
-  c.height = 96;
   const g = c.getContext("2d");
+  const font = "600 46px ui-serif, Georgia, serif";
+  g.font = font;
+  c.width = Math.ceil(g.measureText(text).width) + 56;
+  c.height = 96;
   g.fillStyle = bg;
   g.beginPath();
-  g.roundRect(8, 8, 240, 80, 10);
+  g.roundRect(8, 8, c.width - 16, 80, 10);
   g.fill();
+  g.font = font;
   g.fillStyle = color;
-  g.font = "600 46px ui-serif, Georgia, serif";
   g.textAlign = "center";
   g.textBaseline = "middle";
-  g.fillText(text, 128, 50);
+  g.fillText(text, c.width / 2, 50);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.userData.aspect = c.width / c.height;
   return tex;
 }
 
@@ -487,7 +491,7 @@ export function createScene(canvas, callbacks = {}) {
   thread.rotation.x = -Math.PI / 2;
   thread.position.y = 0.02;
   const boundaryLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture("you left here", { bg: "rgba(168,50,42,0.85)" }), transparent: true }));
-  boundaryLabel.scale.set(1.5, 0.56, 1);
+  boundaryLabel.scale.set(0.42 * boundaryLabel.material.map.userData.aspect, 0.42, 1);
   boundaryLabel.position.set(0, 2.8, -3);
   boundary.add(thread, boundaryLabel);
   boundary.visible = false;
@@ -617,7 +621,7 @@ export function createScene(canvas, callbacks = {}) {
     }
     if (mine || entry.mark.resident) {
       const seal = new THREE.Sprite(new THREE.SpriteMaterial({ map: mine ? yoursLabel : residentLabel, transparent: true, depthWrite: false }));
-      seal.scale.set(0.62, 0.23, 1);
+      seal.scale.set(0.24 * seal.material.map.userData.aspect, 0.24, 1);
       seal.position.set(RIBBON_W / 2 + 0.05, 0.22, 0.2);
       entry.extras.push(seal);
     }
@@ -1014,9 +1018,9 @@ export function createScene(canvas, callbacks = {}) {
       for (const entry of ribbonList) regrow(entry);
       requestFrame();
     },
-    growthOf: (id) => {
+    growthOf: (id, atMs = Date.now() + clockOffset) => {
       const e = ribbons.get(id);
-      return e ? growth(e.mark.seed, ageMinutes(e.mark)) : null;
+      return e ? growth(e.mark.seed, (atMs - Date.parse(e.mark.createdAt)) / 60_000) : null;
     },
     setPresence,
     penTrail,
