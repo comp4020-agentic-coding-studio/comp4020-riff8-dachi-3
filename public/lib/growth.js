@@ -55,3 +55,17 @@ export function signature(g) {
     `/${Math.round(g.settle * 20)}`
   );
 }
+
+// Anniversary echoes: a stroke glows for the twelve hours either side of its
+// first day, week, month and year.
+const ANNIVERSARIES = [
+  [60 * 24, "one-day"],
+  [60 * 24 * 7, "one-week"],
+  [60 * 24 * 30, "one-month"],
+  [60 * 24 * 365, "one-year"],
+];
+
+export function anniversary(ageMinutes) {
+  for (const [at, name] of ANNIVERSARIES) if (Math.abs(ageMinutes - at) <= 720) return name;
+  return null;
+}

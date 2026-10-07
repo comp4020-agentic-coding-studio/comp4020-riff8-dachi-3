@@ -4,7 +4,7 @@
 // text (notes, times, "yours") also lives in the DOM; this file only paints.
 import * as THREE from "three";
 import { BOX, prng } from "./lib/shapes.js";
-import { growth, signature } from "./lib/growth.js";
+import { anniversary, growth, signature } from "./lib/growth.js";
 
 const PAPER = 0xefe7d6;
 const RIBBON_W = 2.1;
@@ -528,7 +528,8 @@ export function createScene(canvas, callbacks = {}) {
 
   function regrow(entry, force = false) {
     const g = growth(entry.mark.seed, ageMinutes(entry.mark));
-    const sig = signature(g);
+    const echo = anniversary(ageMinutes(entry.mark));
+    const sig = signature(g) + (echo ?? "");
     if (!force && sig === entry.growthSig) return false;
     entry.growthSig = sig;
     entry.settle = g.settle;
@@ -541,6 +542,19 @@ export function createScene(canvas, callbacks = {}) {
       entry.living.geometry.dispose();
       entry.living = null;
     }
+    if (entry.echo) {
+      entry.group.remove(entry.echo);
+      entry.echo = null;
+    }
+    if (echo) {
+      // an anniversary: a slow seal-red halo behind the ribbon
+      entry.echo = new THREE.Sprite(new THREE.SpriteMaterial({ map: dot, color: SEAL, transparent: true, opacity: 0.35, depthWrite: false }));
+      entry.echo.scale.set(3.4, 3.4, 1);
+      entry.echo.position.set(0, 1.2, -0.3);
+      entry.echo.renderOrder = -1;
+      entry.group.add(entry.echo);
+      echoes.add(entry);
+    } else echoes.delete(entry);
     if (entry.bloom) {
       entry.group.remove(entry.bloom);
       entry.bloom.geometry.dispose();
@@ -563,6 +577,13 @@ export function createScene(canvas, callbacks = {}) {
     }
     return true;
   }
+
+  const echoes = new Set();
+  extraFrames.add((t, motion) => {
+    for (const entry of echoes) {
+      if (entry.echo) entry.echo.material.opacity = 0.22 + (motion ? 0.16 * Math.sin(t * 1.3 + entry.mark.id) : 0.1);
+    }
+  });
 
   const blossomMaterials = new Map();
   function blossomMaterialFor(hex) {
@@ -601,6 +622,7 @@ export function createScene(canvas, callbacks = {}) {
     const entry = { group, mesh, pos, mark, hi, lo, lod: "hi", extras: [], local, living: null, bloom: null };
     decorate(entry);
     regrow(entry, true);
+    if (grow) deferExtras(entry);
     scene.add(group);
     ribbons.set(mark.id, entry);
     ribbonList.push(entry);
@@ -621,11 +643,23 @@ export function createScene(canvas, callbacks = {}) {
     }
     if (mine || entry.mark.resident) {
       const seal = new THREE.Sprite(new THREE.SpriteMaterial({ map: mine ? yoursLabel : residentLabel, transparent: true, depthWrite: false }));
-      seal.scale.set(0.24 * seal.material.map.userData.aspect, 0.24, 1);
+      seal.scale.set(0.17 * seal.material.map.userData.aspect, 0.17, 1);
       seal.position.set(RIBBON_W / 2 + 0.05, 0.22, 0.2);
       entry.extras.push(seal);
     }
     for (const extra of entry.extras) entry.group.add(extra);
+  }
+
+  // While the ink grows in, its outline, seal and branches wait.
+  function deferExtras(entry) {
+    if (reducedMotion()) return;
+    const later = [...entry.extras, entry.living, entry.bloom, entry.echo].filter(Boolean);
+    for (const o of later) o.visible = false;
+    clearTimeout(entry.deferTimer);
+    entry.deferTimer = setTimeout(() => {
+      for (const o of later) o.visible = true;
+      requestFrame();
+    }, 1800);
   }
 
   function clearRibbons() {
@@ -980,6 +1014,7 @@ export function createScene(canvas, callbacks = {}) {
           geo.attributes.aBirth.array.fill(reducedMotion() ? -100 : birthNow());
           geo.attributes.aBirth.needsUpdate = true;
         }
+        deferExtras(entry);
       }
       requestFrame();
     },
@@ -1017,6 +1052,10 @@ export function createScene(canvas, callbacks = {}) {
       clockOffset = ms;
       for (const entry of ribbonList) regrow(entry);
       requestFrame();
+    },
+    anniversaryOf: (id) => {
+      const e = ribbons.get(id);
+      return e ? anniversary(ageMinutes(e.mark)) : null;
     },
     growthOf: (id, atMs = Date.now() + clockOffset) => {
       const e = ribbons.get(id);

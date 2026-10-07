@@ -229,6 +229,59 @@ select:hover {
   accent-color: var(--ink);
 }
 
+.pulse {
+  display: flex;
+  align-items: end;
+  gap: 0.75rem;
+  margin-block-start: 0.75rem;
+  overflow-x: auto;
+}
+
+.pulse__label {
+  flex: none;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.pulse__days {
+  list-style: none;
+  display: flex;
+  align-items: end;
+  gap: 3px;
+  margin: 0;
+  padding: 0 0 0.25rem;
+  min-height: 3rem;
+}
+
+.pulse__day {
+  display: flex;
+  align-items: end;
+  height: 3rem;
+  min-width: 0.9rem;
+  padding: 0 1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+}
+
+.pulse__bar {
+  display: block;
+  width: 100%;
+  min-height: 3px;
+  background: var(--ink-soft);
+  border-radius: 2px 2px 0 0;
+}
+
+.pulse__day:hover .pulse__bar,
+.pulse__day[aria-current="true"] .pulse__bar {
+  background: var(--seal);
+}
+
+.pulse__day[aria-current="true"] {
+  border-bottom-color: var(--seal);
+}
+
 .now-at,
 .sound-said {
   margin: 0.25rem 0;
@@ -461,7 +514,15 @@ body.wall .welcome-back {
   display: none;
 }
 
+body.wall main {
+  max-width: none;
+}
+
 body.wall .world {
   margin: 0;
   height: 100vh;
+}
+
+body.wall .stage > :not(.world) {
+  display: none;
 }

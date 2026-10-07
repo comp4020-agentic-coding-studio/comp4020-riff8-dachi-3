@@ -227,7 +227,7 @@ function bringIntoView(id) {
   if (i < 0) return;
   const mark = state.marks[i];
   const grown = growthText(mark);
-  nowAt.textContent = `Stroke ${i + 1} of ${state.marks.length}: ${describe(mark)}${grown ? `; it ${grown}` : ""}`;
+  nowAt.textContent = `Stroke ${i + 1} of ${state.marks.length}: ${describe(mark)}${grown ? `; ${grown}` : ""}`;
   for (const li of scrollList.querySelectorAll(".mark--focus")) li.classList.remove("mark--focus");
   scrollList.querySelector(`[data-id="${id}"]`)?.classList.add("mark--focus");
   if (!state.scene) return;
@@ -252,12 +252,17 @@ function step(direction) {
 
 // Living Ink, said in words: what the stroke has grown since it was drawn.
 function growthText(mark) {
+  const echo = state.scene?.anniversaryOf(mark.id);
+  return [grownOnly(mark), echo ? `today is its ${echo} anniversary` : ""].filter(Boolean).join(", and ");
+}
+
+function grownOnly(mark) {
   const g = state.scene?.growthOf(mark.id);
   if (!g || g.tendrils.length === 0) return "";
   const branches = g.tendrils.reduce((n, t) => n + 1 + (t.fork ? 1 : 0), 0);
   const blossoms = g.tendrils.reduce((n, t) => n + t.blossoms, 0);
   const plural = (n, w) => `${n} ${w}${n === 1 ? "" : w.endsWith("h") ? "es" : "s"}`;
-  return `has grown ${plural(branches, "branch")}${blossoms ? ` and ${plural(blossoms, "blossom")}` : ""}`;
+  return `it has grown ${plural(branches, "branch")}${blossoms ? ` and ${plural(blossoms, "blossom")}` : ""}`;
 }
 
 let cardTimer = null;
@@ -886,6 +891,89 @@ $("verify").addEventListener("click", async () => {
     ? `All ${state.marks.length} strokes check out: the hash chain is unbroken from the first stroke to the newest, whose link begins ${prev.slice(0, 12)}.`
     : "Nothing to verify yet: the scroll is empty.";
 });
+
+// --- pulse: a one-glance timeline that doubles as navigation ---------------
+
+const pulseDays = $("pulse-days");
+const dayKey = (iso) => {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+};
+let pulseTimer = null;
+
+function renderPulse() {
+  const days = new Map();
+  for (const m of state.marks) {
+    const k = dayKey(m.createdAt);
+    if (!days.has(k)) days.set(k, []);
+    days.get(k).push(m);
+  }
+  const max = Math.max(1, ...[...days.values()].map((d) => d.length));
+  pulseDays.replaceChildren(
+    ...[...days.entries()].map(([k, marks]) => {
+      const li = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "pulse__day";
+      button.dataset.day = k;
+      const label = new Date(marks[0].createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+      const text = document.createElement("span");
+      text.className = "visually-hidden";
+      text.textContent = `${label}: ${marks.length} ${marks.length === 1 ? "stroke" : "strokes"}`;
+      const bar = document.createElement("span");
+      bar.className = "pulse__bar";
+      bar.setAttribute("aria-hidden", "true");
+      bar.style.height = `${Math.round((marks.length / max) * 100)}%`;
+      button.title = text.textContent;
+      button.append(text, bar);
+      button.addEventListener("click", () => {
+        hooks.userMove?.();
+        bringIntoView(marks[0].id);
+      });
+      li.append(button);
+      return li;
+    }),
+  );
+}
+
+hooks.loaded.push(renderPulse);
+hooks.arrive.push(() => renderPulse());
+hooks.camera.push((x) => {
+  clearTimeout(pulseTimer);
+  pulseTimer = setTimeout(() => {
+    const i = indexNear(x);
+    const k = i >= 0 ? dayKey(state.marks[i].createdAt) : null;
+    for (const b of pulseDays.querySelectorAll("button")) {
+      if (b.dataset.day === k) b.setAttribute("aria-current", "true");
+      else b.removeAttribute("aria-current");
+    }
+  }, 200);
+});
+
+// --- wall mode: /?wall, the scroll alone, for a projector ------------------
+
+const wall = new URLSearchParams(location.search).has("wall");
+if (wall) {
+  document.body.classList.add("wall");
+  // read-only, and it plays itself: through the whole scroll, a pause at
+  // the open end, then again; a new stroke is brought into view as it lands
+  hooks.sceneReady = () => {
+    const loop = () => {
+      if (!playback.active) startPlayback();
+      setTimeout(loop, 20_000);
+    };
+    setTimeout(loop, 3000);
+  };
+  hooks.arrive.push((mark, { live }) => {
+    if (!live || !state.scene) return;
+    stopPlayback(false);
+    bringIntoView(mark.id);
+  });
+  // keep a projector's screen awake where the browser allows it
+  const lock = () => navigator.wakeLock?.request("screen").catch(() => {});
+  lock();
+  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && lock());
+}
 
 buildPalette();
 loadPad();
