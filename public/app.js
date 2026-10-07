@@ -229,8 +229,12 @@ function bringIntoView(id) {
   const grown = growthText(mark);
   nowAt.textContent = `Stroke ${i + 1} of ${state.marks.length}: ${describe(mark)}${grown ? `; ${grown}` : ""}`;
   for (const li of scrollList.querySelectorAll(".mark--focus")) li.classList.remove("mark--focus");
-  scrollList.querySelector(`[data-id="${id}"]`)?.classList.add("mark--focus");
-  if (!state.scene) return;
+  const li = scrollList.querySelector(`[data-id="${id}"]`);
+  li?.classList.add("mark--focus");
+  if (!state.scene) {
+    li?.scrollIntoView({ block: "nearest" });
+    return;
+  }
   state.scene.goTo(state.lay.positions[i].x);
   state.scene.setFocus(id);
   hooks.focus.forEach((fn) => fn(mark));
@@ -546,8 +550,9 @@ async function loadScene() {
     $("world").hidden = true;
     $("world-fallback").hidden = false;
     $("position-control").hidden = true;
-    $("prev-stroke").hidden = true;
-    $("next-stroke").hidden = true;
+    for (const id of ["prev-stroke", "next-stroke", "play", "play-speed-label", "play-speed", "stop", "share-link"]) {
+      $(id).hidden = true;
+    }
     textToggle.checked = true;
     textToggle.closest("label").hidden = true;
     textPanel.hidden = false;
