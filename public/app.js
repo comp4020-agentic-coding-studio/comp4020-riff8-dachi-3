@@ -158,7 +158,8 @@ function bringIntoView(id) {
   const i = state.marks.findIndex((m) => m.id === id);
   if (i < 0) return;
   const mark = state.marks[i];
-  nowAt.textContent = `Stroke ${i + 1} of ${state.marks.length}: ${describe(mark)}`;
+  const grown = growthText(mark);
+  nowAt.textContent = `Stroke ${i + 1} of ${state.marks.length}: ${describe(mark)}${grown ? `; it ${grown}` : ""}`;
   for (const li of scrollList.querySelectorAll(".mark--focus")) li.classList.remove("mark--focus");
   scrollList.querySelector(`[data-id="${id}"]`)?.classList.add("mark--focus");
   if (!state.scene) return;
@@ -181,6 +182,16 @@ function step(direction) {
 
 // --- hover card ----------------------------------------------------------
 
+// Living Ink, said in words: what the stroke has grown since it was drawn.
+function growthText(mark) {
+  const g = state.scene?.growthOf(mark.id);
+  if (!g || g.tendrils.length === 0) return "";
+  const branches = g.tendrils.reduce((n, t) => n + 1 + (t.fork ? 1 : 0), 0);
+  const blossoms = g.tendrils.reduce((n, t) => n + t.blossoms, 0);
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : w.endsWith("h") ? "es" : "s"}`;
+  return `has grown ${plural(branches, "branch")}${blossoms ? ` and ${plural(blossoms, "blossom")}` : ""}`;
+}
+
 let cardTimer = null;
 function showCard(mark, left, top) {
   hoverCard.textContent = "";
@@ -189,6 +200,12 @@ function showCard(mark, left, top) {
   const meta = document.createElement("span");
   meta.textContent = `${timeLabel(mark.createdAt)} · ${colorName(mark.color)}${whoSuffix(mark)}`;
   hoverCard.append(note, meta);
+  const grown = growthText(mark);
+  if (grown) {
+    const g = document.createElement("span");
+    g.textContent = grown;
+    hoverCard.append(g);
+  }
   hoverCard.hidden = false;
   const world = $("world").getBoundingClientRect();
   const w = hoverCard.offsetWidth;
@@ -249,6 +266,7 @@ async function load() {
     state.marks = data.marks;
     state.byId = new Map(data.marks.map((m) => [m.id, m]));
     state.lastVisit = data.lastVisit ?? null;
+    state.clockOffset = data.now ? Date.parse(data.now) - Date.now() : 0;
     renderList();
     renderWelcome();
     relayout();
@@ -466,6 +484,7 @@ function openingX() {
 function showScroll() {
   if (!state.scene) return;
   state.scene.setYou(state.you);
+  state.scene.setClockOffset(state.clockOffset ?? 0);
   state.scene.setMarks(state.marks, state.lay);
   hooks.sceneReady?.();
   if (!hooks.initialView?.()) state.scene.goTo(openingX(), { instant: true });

@@ -4,6 +4,7 @@
 // text (notes, times, "yours") also lives in the DOM; this file only paints.
 import * as THREE from "three";
 import { BOX, prng } from "./lib/shapes.js";
+import { growth, signature } from "./lib/growth.js";
 
 const PAPER = 0xefe7d6;
 const RIBBON_W = 2.1;
@@ -298,6 +299,68 @@ export function ribbonGeometry(points3, seed, segments, widen = 0, scale = 1) {
   return geo;
 }
 
+function mergeGeometries(geos) {
+  let vertices = 0;
+  const positions = [];
+  const uvs = [];
+  const index = [];
+  for (const g of geos) {
+    positions.push(...g.attributes.position.array);
+    uvs.push(...g.attributes.uv.array);
+    for (const i of g.index.array) index.push(i + vertices);
+    vertices += g.attributes.position.count;
+    g.dispose();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(index);
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+// A branch: from `origin`, heading `angle` radians off straight up, bending
+// by `curl` along its length.
+function branchPoints(origin, angle, curl, length, n = 10) {
+  const pts = [origin.clone()];
+  let a = angle;
+  const step = length / (n - 1);
+  for (let i = 1; i < n; i++) {
+    a += (curl / n) * 1.2;
+    const prev = pts[i - 1];
+    pts.push(new THREE.Vector3(prev.x + Math.sin(a) * step, Math.max(0.05, prev.y + Math.cos(a) * step), prev.z + 0.01));
+  }
+  return pts;
+}
+
+// Living Ink, drawn: tendrils as thin ribbons from the stroke, blossoms as
+// pale dots of its own pigment at their tips (lib/growth.js decides what).
+function growthGeometry(local, seed, g) {
+  if (g.tendrils.length === 0) return { branches: null, blossoms: [] };
+  const spine = local.length >= 2 ? new THREE.CatmullRomCurve3(local) : null;
+  const parts = [];
+  const blossoms = [];
+  const r = prng(seed ^ 0x51ed27);
+  for (const t of g.tendrils) {
+    if (t.length < 0.02) continue;
+    const origin = spine ? spine.getPointAt(t.at) : local[0].clone();
+    const main = branchPoints(origin, t.angle, t.curl, t.length * 1.5);
+    parts.push(ribbonGeometry(main, seed + 1, 14, 0.004, 0.17));
+    let tips = [main[main.length - 1]];
+    if (t.fork && t.fork.length > 0.02) {
+      const from = main[Math.floor(t.fork.at * (main.length - 1))];
+      const fork = branchPoints(from, t.angle + t.fork.angle, -t.curl, t.fork.length * 1.5, 7);
+      parts.push(ribbonGeometry(fork, seed + 2, 10, 0.003, 0.13));
+      tips.push(fork[fork.length - 1]);
+    }
+    for (let b = 0; b < t.blossoms; b++) {
+      const tip = tips[b % tips.length];
+      blossoms.push(tip.x + (r() - 0.5) * 0.18, tip.y + (r() - 0.5) * 0.18, tip.z + 0.02);
+    }
+  }
+  return { branches: parts.length ? mergeGeometries(parts) : null, blossoms };
+}
+
 function constant(geo, name, size, values) {
   const count = geo.attributes.position.count;
   const arr = new Float32Array(count * size);
@@ -448,18 +511,72 @@ export function createScene(canvas, callbacks = {}) {
     return clock.getElapsedTime();
   }
 
-  function buildRibbon(mark, pos, { grow = false, age = 0 } = {}) {
+  let clockOffset = 0; // server time minus this browser's, so windows agree
+  const ageMinutes = (mark) => (Date.now() + clockOffset - Date.parse(mark.createdAt)) / 60_000;
+
+  function inkAttributes(geo, mark, color, birth, age) {
+    constant(geo, "aColor", 3, [color.r, color.g, color.b]);
+    constant(geo, "aBirth", 1, [birth]);
+    constant(geo, "aSeed", 1, [(mark.seed % 10007) / 10007]);
+    constant(geo, "aId", 1, [mark.id]);
+    constant(geo, "aAge", 1, [age]);
+  }
+
+  function regrow(entry, force = false) {
+    const g = growth(entry.mark.seed, ageMinutes(entry.mark));
+    const sig = signature(g);
+    if (!force && sig === entry.growthSig) return false;
+    entry.growthSig = sig;
+    entry.settle = g.settle;
+    for (const geo of [entry.hi, entry.lo]) {
+      geo.attributes.aAge.array.fill(g.settle);
+      geo.attributes.aAge.needsUpdate = true;
+    }
+    if (entry.living) {
+      entry.group.remove(entry.living);
+      entry.living.geometry.dispose();
+      entry.living = null;
+    }
+    if (entry.bloom) {
+      entry.group.remove(entry.bloom);
+      entry.bloom.geometry.dispose();
+      entry.bloom = null;
+    }
+    const { branches, blossoms } = growthGeometry(entry.local, entry.mark.seed, g);
+    const color = new THREE.Color(entry.mark.color);
+    if (branches) {
+      inkAttributes(branches, entry.mark, color, -100, g.settle);
+      entry.living = new THREE.Mesh(branches, inkMaterial);
+      entry.living.userData.id = entry.mark.id;
+      entry.group.add(entry.living);
+    }
+    if (blossoms.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(blossoms, 3));
+      entry.bloom = new THREE.Points(geo, blossomMaterialFor(entry.mark.color));
+      entry.bloom.renderOrder = 2;
+      entry.group.add(entry.bloom);
+    }
+    return true;
+  }
+
+  const blossomMaterials = new Map();
+  function blossomMaterialFor(hex) {
+    if (!blossomMaterials.has(hex)) {
+      // plum blossoms in the stroke's own pigment, warmed toward seal red
+      const c = new THREE.Color(hex).lerp(SEAL, 0.35);
+      blossomMaterials.set(hex, new THREE.PointsMaterial({ map: dot, color: c, size: 0.6, transparent: true, opacity: 0.9, depthWrite: false }));
+    }
+    return blossomMaterials.get(hex);
+  }
+
+  function buildRibbon(mark, pos, { grow = false } = {}) {
+    const age = 0;
     const local = toLocal(mark.path, mark.seed);
     const color = new THREE.Color(mark.color);
     const hi = ribbonGeometry(local, mark.seed, Math.min(140, Math.max(24, local.length * 3)));
     const lo = ribbonGeometry(local, mark.seed, 12);
-    for (const geo of [hi, lo]) {
-      constant(geo, "aColor", 3, [color.r, color.g, color.b]);
-      constant(geo, "aBirth", 1, [grow && !reducedMotion() ? birthNow() : -100]);
-      constant(geo, "aSeed", 1, [(mark.seed % 10007) / 10007]);
-      constant(geo, "aId", 1, [mark.id]);
-      constant(geo, "aAge", 1, [age]);
-    }
+    for (const geo of [hi, lo]) inkAttributes(geo, mark, color, grow && !reducedMotion() ? birthNow() : -100, age);
     const group = new THREE.Group();
     group.position.set(pos.x, 0, pos.z);
     const mesh = new THREE.Mesh(hi, inkMaterial);
@@ -477,8 +594,9 @@ export function createScene(canvas, callbacks = {}) {
     pool.scale.setScalar(0.5 + (mark.seed % 7) / 14);
     pool.renderOrder = -2;
     group.add(shadow, pool, mesh);
-    const entry = { group, mesh, pos, mark, hi, lo, lod: "hi", extras: [] };
+    const entry = { group, mesh, pos, mark, hi, lo, lod: "hi", extras: [], local, living: null, bloom: null };
     decorate(entry);
+    regrow(entry, true);
     scene.add(group);
     ribbons.set(mark.id, entry);
     ribbonList.push(entry);
@@ -511,6 +629,8 @@ export function createScene(canvas, callbacks = {}) {
       scene.remove(entry.group);
       entry.hi.dispose();
       entry.lo.dispose();
+      entry.living?.geometry.dispose();
+      entry.bloom?.geometry.dispose();
     }
     ribbons.clear();
     ribbonList.length = 0;
@@ -803,6 +923,13 @@ export function createScene(canvas, callbacks = {}) {
     if (busy || pens.size) requestFrame();
   });
 
+  // Living Ink keeps growing while you watch: check every minute.
+  setInterval(() => {
+    let changed = false;
+    for (const entry of ribbonList) changed = regrow(entry) || changed;
+    if (changed) requestFrame();
+  }, 60_000);
+
   const projected = new THREE.Vector3();
 
   return {
@@ -823,9 +950,9 @@ export function createScene(canvas, callbacks = {}) {
       for (const entry of ribbonList) decorate(entry);
       requestFrame();
     },
-    setMarks(marks, lay, ages = new Map()) {
+    setMarks(marks, lay) {
       clearRibbons();
-      marks.forEach((mark, i) => buildRibbon(mark, lay.positions[i], { age: ages.get(mark.id) ?? 0 }));
+      marks.forEach((mark, i) => buildRibbon(mark, lay.positions[i]));
       setExtent(lay);
       requestFrame();
     },
@@ -838,14 +965,6 @@ export function createScene(canvas, callbacks = {}) {
     setExtent(lay) {
       setExtent(lay);
       requestFrame();
-    },
-    setAge(id, age) {
-      const entry = ribbons.get(id);
-      if (!entry) return;
-      for (const geo of [entry.hi, entry.lo]) {
-        geo.attributes.aAge.array.fill(age);
-        geo.attributes.aAge.needsUpdate = true;
-      }
     },
     // Hide or show a ribbon (Play mode reveals them as the camera arrives).
     setHidden(id, hidden, { grow = false } = {}) {
@@ -890,6 +1009,15 @@ export function createScene(canvas, callbacks = {}) {
       return () => extraFrames.delete(fn);
     },
     requestFrame,
+    setClockOffset(ms) {
+      clockOffset = ms;
+      for (const entry of ribbonList) regrow(entry);
+      requestFrame();
+    },
+    growthOf: (id) => {
+      const e = ribbons.get(id);
+      return e ? growth(e.mark.seed, ageMinutes(e.mark)) : null;
+    },
     setPresence,
     penTrail,
     endPen,

@@ -236,7 +236,7 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/marks") {
       const { hand, setCookie } = handFor(req);
       res.writeHead(200, { ...setCookie, "content-type": "application/json" });
-      res.end(JSON.stringify({ marks: listMarks(), you: handleFor(hand) }));
+      res.end(JSON.stringify({ marks: listMarks(), you: handleFor(hand), now: new Date().toISOString() }));
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/events") {
