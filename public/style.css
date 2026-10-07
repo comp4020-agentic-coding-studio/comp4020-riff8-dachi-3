@@ -185,3 +185,40 @@ form button:hover {
 .readme h1:first-child {
   margin-block-start: 0;
 }
+
+.compose {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  margin-block-end: 1rem;
+}
+
+.pad-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(100%, 18rem);
+}
+
+.pad {
+  width: 100%;
+  aspect-ratio: 1;
+  background: #fbf8f1;
+  border: 1px solid var(--border);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.shapes {
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 9rem;
+}
+
+.shapes label {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}

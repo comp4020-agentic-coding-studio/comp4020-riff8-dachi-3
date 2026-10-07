@@ -17,7 +17,7 @@ async function addStroke(note: string, cookie?: string): Promise<string> {
       origin: baseUrl,
       ...(cookie ? { cookie } : {}),
     },
-    body: JSON.stringify({ color: "#3f5d40", note }),
+    body: JSON.stringify({ color: "#3f5d40", note, shape: "line" }),
   });
   expect(res.status).toBe(201);
   return cookie ?? res.headers.get("set-cookie")!.split(";")[0];
@@ -68,7 +68,7 @@ it("offers only native, labelled, keyboard-reachable controls", async () => {
   const doc = await openPage(await addStroke(`page test, controls ${randomUUID()}`));
   const form = doc.getElementById("add-mark-form")!;
 
-  const radios = [...form.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+  const radios = [...form.querySelectorAll<HTMLInputElement>('.palette input[type="radio"]')];
   expect(radios).toHaveLength(6);
 
   const controls = [...form.querySelectorAll<HTMLInputElement>("input, button")];

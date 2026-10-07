@@ -25,7 +25,7 @@ it("rejects a colour outside the six the palette offers", async () => {
   const res = await fetch(new URL("/api/marks", baseUrl), {
     method: "POST",
     headers: postHeaders(),
-    body: JSON.stringify({ color: "#ff00ff", note: "not on the palette" }),
+    body: JSON.stringify({ color: "#ff00ff", note: "not on the palette", shape: "line" }),
   });
   expect(res.status).toBe(422);
   expect((await res.json()).error).toBe("unknown-color");
@@ -35,7 +35,7 @@ it("rejects a note over 140 characters even though the input's own maxlength wou
   const res = await fetch(new URL("/api/marks", baseUrl), {
     method: "POST",
     headers: postHeaders(),
-    body: JSON.stringify({ color: "#2b2118", note: "x".repeat(141) }),
+    body: JSON.stringify({ color: "#2b2118", note: "x".repeat(141), shape: "line" }),
   });
   expect(res.status).toBe(422);
   expect((await res.json()).error).toBe("note-too-long");
@@ -45,7 +45,7 @@ it("rejects a body larger than the server's own cap, before it ever reaches vali
   const res = await fetch(new URL("/api/marks", baseUrl), {
     method: "POST",
     headers: postHeaders(),
-    body: JSON.stringify({ color: "#2b2118", note: "x".repeat(20_000) }),
+    body: JSON.stringify({ color: "#2b2118", note: "x".repeat(20_000), shape: "line" }),
   });
   expect(res.status).toBe(413);
 });
@@ -68,7 +68,7 @@ it("adds a valid stroke, and a fresh read of the scroll includes it", async () =
   const post = await fetch(new URL("/api/marks", baseUrl), {
     method: "POST",
     headers: postHeaders(),
-    body: JSON.stringify({ color: "#3f5d40", note }),
+    body: JSON.stringify({ color: "#3f5d40", note, shape: "line" }),
   });
   expect(post.status).toBe(201);
   const created = (await post.json()).mark;
@@ -84,7 +84,7 @@ it("remembers a hand across requests, and a returning hand can see its own past 
   const first = await fetch(new URL("/api/marks", baseUrl), {
     method: "POST",
     headers: postHeaders(),
-    body: JSON.stringify({ color: "#3a5a6b", note: "first visit" }),
+    body: JSON.stringify({ color: "#3a5a6b", note: "first visit", shape: "line" }),
   });
   const cookie = firstCookie(first);
   expect(cookie, "no hand cookie was set on first contact").toBeTruthy();
@@ -114,7 +114,7 @@ it("treats an oversized hand cookie as no hand, not a stored value, and mints a 
   const res = await fetch(new URL("/api/marks", baseUrl), {
     method: "POST",
     headers: postHeaders({ cookie: `hand=${oversized}` }),
-    body: JSON.stringify({ color: "#8a6d3b", note: "oversized hand probe" }),
+    body: JSON.stringify({ color: "#8a6d3b", note: "oversized hand probe", shape: "line" }),
   });
   expect(res.status).toBe(201);
   const created = (await res.json()).mark;
@@ -129,7 +129,7 @@ it("rejects a cross-site POST even when every field is otherwise valid", async (
   const res = await fetch(new URL("/api/marks", baseUrl), {
     method: "POST",
     headers: { "content-type": "application/json", origin: "https://attacker.example" },
-    body: JSON.stringify({ color: "#2b2118", note: "drive-by" }),
+    body: JSON.stringify({ color: "#2b2118", note: "drive-by", shape: "line" }),
   });
   expect(res.status).toBe(403);
 
@@ -142,7 +142,7 @@ it("rejects a POST with no Origin header at all, the same as a mismatched one", 
   const res = await fetch(new URL("/api/marks", baseUrl), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ color: "#2b2118", note: "no origin header" }),
+    body: JSON.stringify({ color: "#2b2118", note: "no origin header", shape: "line" }),
   });
   expect(res.status).toBe(403);
 });
@@ -215,7 +215,7 @@ it("refuses to edit or delete a stored stroke, by any method, from the stroke's 
   const post = await fetch(new URL("/api/marks", baseUrl), {
     method: "POST",
     headers: postHeaders(),
-    body: JSON.stringify({ color: "#7a3b3b", note }),
+    body: JSON.stringify({ color: "#7a3b3b", note, shape: "line" }),
   });
   const cookie = firstCookie(post)!;
   const created = (await post.json()).mark;
@@ -247,6 +247,7 @@ it("ignores a hand, id or timestamp a request body tries to set for itself", asy
     body: JSON.stringify({
       color: "#8a6d3b",
       note: "forged fields",
+      shape: "line",
       hand: someoneElse,
       handle: someoneElse,
       id: before[0].id,
@@ -260,4 +261,80 @@ it("ignores a hand, id or timestamp a request body tries to set for itself", asy
   expect(created.handle).toBe((await mine.json()).you);
   expect(created.id).toBeGreaterThan(Math.max(...before.map((m: { id: number }) => m.id)));
   expect(created.createdAt).not.toBe("1269-01-01T00:00:00.000Z");
+});
+
+// A stroke is a drawn path: at most 96 integer points inside the pad's
+// 1000×1000 box, or the name of one of the six keyboard shapes, which the
+// server draws itself from the stroke's own seed.
+it("stores a drawn path exactly and gives the stroke a seed", async () => {
+  const path = [
+    [100, 900],
+    [500, 120],
+    [900, 880],
+  ];
+  const res = await fetch(new URL("/api/marks", baseUrl), {
+    method: "POST",
+    headers: postHeaders(),
+    body: JSON.stringify({ color: "#3f5d40", note: "drawn", path }),
+  });
+  expect(res.status).toBe(201);
+  const { mark } = await res.json();
+  expect(mark.path).toEqual(path);
+  expect(Number.isInteger(mark.seed)).toBe(true);
+});
+
+it("draws a keyboard shape server-side as a valid path", async () => {
+  for (const shape of ["wave", "peak", "hook", "loop", "dot", "line"]) {
+    const res = await fetch(new URL("/api/marks", baseUrl), {
+      method: "POST",
+      headers: postHeaders(),
+      body: JSON.stringify({ color: "#3a5a6b", note: `shape ${shape}`, shape }),
+    });
+    expect(res.status, shape).toBe(201);
+    const { mark } = await res.json();
+    expect(mark.path.length).toBeGreaterThan(0);
+    expect(mark.path.length).toBeLessThanOrEqual(96);
+    for (const [x, y] of mark.path) {
+      expect(Number.isInteger(x) && Number.isInteger(y)).toBe(true);
+      expect(x >= 0 && x <= 1000 && y >= 0 && y <= 1000).toBe(true);
+    }
+  }
+});
+
+it("rejects every hostile geometry a request that isn't the pad could send", async () => {
+  const cases: [unknown, string][] = [
+    [{ path: [] }, "bad-path"],
+    [{ path: Array.from({ length: 97 }, (_, i) => [i, i]) }, "bad-path"],
+    [{ path: [[0, 1001]] }, "bad-path"],
+    [{ path: [[-1, 5]] }, "bad-path"],
+    [{ path: [[1.5, 5]] }, "bad-path"],
+    [{ path: [["10", 5]] }, "bad-path"],
+    [{ path: [[10, 5, 7]] }, "bad-path"],
+    [{ path: [[10]] }, "bad-path"],
+    [{ path: [null] }, "bad-path"],
+    [{ path: "10,5" }, "bad-path"],
+    [{ path: { 0: [1, 1], length: 1 } }, "bad-path"],
+    [{ path: [[1e400, 5]] }, "bad-path"],
+    [{ path: [[1, 1]], shape: "wave" }, "bad-path"],
+    [{ shape: "spiral" }, "unknown-shape"],
+    [{ shape: ["wave"] }, "unknown-shape"],
+    [{ shape: "__proto__" }, "unknown-shape"],
+    [{}, "missing-path"],
+  ];
+  for (const [geometry, reason] of cases) {
+    const res = await fetch(new URL("/api/marks", baseUrl), {
+      method: "POST",
+      headers: postHeaders(),
+      body: JSON.stringify({ color: "#2b2118", note: "hostile geometry", ...(geometry as object) }),
+    });
+    expect(res.status, JSON.stringify(geometry)).toBe(422);
+    expect((await res.json()).error, JSON.stringify(geometry)).toBe(reason);
+  }
+});
+
+it("rejects a JSON body that isn't an object", async () => {
+  for (const body of ["[]", "null", "42", '"stroke"']) {
+    const res = await fetch(new URL("/api/marks", baseUrl), { method: "POST", headers: postHeaders(), body });
+    expect(res.status, body).toBe(400);
+  }
 });

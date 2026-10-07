@@ -256,7 +256,7 @@ const server = createServer(async (req, res) => {
         return;
       }
 
-      const mark = addMark(hand, validated.note, validated.color);
+      const mark = addMark(hand, validated.note, validated.color, validated.geometry);
       broadcastMark(mark);
       res.writeHead(201, { ...setCookie, "content-type": "application/json" });
       res.end(JSON.stringify({ mark }));

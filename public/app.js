@@ -117,10 +117,44 @@ async function load() {
   }
 }
 
+// The pad is a module; if it can't load (or there is no canvas support), the
+// shape radios still make a complete stroke on their own.
+let pad = null;
+const drawnLabel = document.getElementById("shape-drawn-label");
+const selectedShape = () => new FormData(form).get("shape");
+async function loadPad() {
+  try {
+    const { createPad } = await import("./pad.js");
+    pad = createPad(document.getElementById("pad"), {
+      getColor: () => new FormData(form).get("color"),
+      onStart() {
+        drawnLabel.hidden = false;
+        drawnLabel.querySelector("input").checked = true;
+      },
+    });
+    pad.showShape(selectedShape());
+    document.getElementById("pad-clear").addEventListener("click", () => {
+      pad.clear();
+      drawnLabel.hidden = true;
+      form.querySelector('input[name="shape"][value="wave"]').checked = true;
+      pad.showShape("wave");
+    });
+    form.addEventListener("change", (event) => {
+      if (event.target.name === "shape" && event.target.value !== "drawn") pad.showShape(event.target.value);
+      if (event.target.name === "color") pad.redraw();
+    });
+  } catch {
+    document.querySelector(".pad-wrap").hidden = true;
+  }
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const color = new FormData(form).get("color");
   const note = noteInput.value;
+  const shape = selectedShape();
+  const geometry =
+    shape === "drawn" && pad?.hasDrawing() ? { path: pad.path() } : { shape: shape === "drawn" ? "wave" : shape };
 
   statusEl.textContent = "adding your mark…";
   let res;
@@ -128,7 +162,7 @@ form.addEventListener("submit", async (event) => {
     res = await fetch("/api/marks", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ color, note }),
+      body: JSON.stringify({ color, note, ...geometry }),
     });
   } catch {
     statusEl.textContent = "that mark couldn't be added — check your connection and try again.";
@@ -143,6 +177,7 @@ form.addEventListener("submit", async (event) => {
   const { mark } = await res.json();
   addLive(mark);
   noteInput.value = "";
+  if (pad?.hasDrawing()) document.getElementById("pad-clear").click();
   statusEl.textContent = "added to the scroll.";
 });
 
@@ -183,4 +218,5 @@ function connect() {
 }
 
 buildPalette();
+loadPad();
 load();

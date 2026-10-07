@@ -58,7 +58,7 @@ it("keeps a hand's past strokes after the server process restarts", async () => 
   const post = await fetch(new URL("/api/marks", origin), {
     method: "POST",
     headers: { "content-type": "application/json", origin },
-    body: JSON.stringify({ color: "#3a5a6b", note: "survives a restart" }),
+    body: JSON.stringify({ color: "#3a5a6b", note: "survives a restart", shape: "line" }),
   });
   expect(post.status, `POST failed; stderr: ${first.stderr()}`).toBe(201);
   const cookie = post.headers.get("set-cookie")?.split(";")[0];

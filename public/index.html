@@ -26,9 +26,34 @@
         </ol>
       </section>
 
-      <form id="add-mark-form" aria-label="add your mark">
+      <form id="add-mark-form" aria-label="add your stroke">
         <fieldset>
-          <legend>Add your mark</legend>
+          <legend>Add your stroke</legend>
+
+          <div class="compose">
+            <div class="pad-wrap">
+              <canvas
+                id="pad"
+                class="pad"
+                role="img"
+                aria-label="drawing pad: draw one stroke with a mouse, finger or pen; with a keyboard, choose a shape instead"
+              ></canvas>
+              <button type="button" id="pad-clear">Clear the pad</button>
+            </div>
+
+            <fieldset class="shapes">
+              <legend>Stroke</legend>
+              <label id="shape-drawn-label" hidden
+                ><input type="radio" name="shape" value="drawn" /> my drawing</label
+              >
+              <label><input type="radio" name="shape" value="wave" checked /> wave</label>
+              <label><input type="radio" name="shape" value="peak" /> peak</label>
+              <label><input type="radio" name="shape" value="hook" /> hook</label>
+              <label><input type="radio" name="shape" value="loop" /> loop</label>
+              <label><input type="radio" name="shape" value="dot" /> dot</label>
+              <label><input type="radio" name="shape" value="line" /> line</label>
+            </fieldset>
+          </div>
 
           <div class="palette" role="radiogroup" aria-label="ink colour">
             <!-- populated by app.js from the same palette the server validates against -->
