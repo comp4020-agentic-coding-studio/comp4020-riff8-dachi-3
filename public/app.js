@@ -471,6 +471,101 @@ function showScroll() {
   if (!hooks.initialView?.()) state.scene.goTo(openingX(), { instant: true });
 }
 
+// --- sound ---------------------------------------------------------------
+
+// Off until the visitor turns it on; remembered per browser. A browser only
+// lets audio start inside a gesture, so a remembered "on" waits for the
+// first touch or key.
+const SOUND_KEY = "long-scroll-sound";
+const soundToggle = $("sound-toggle");
+const soundSaid = $("sound-said");
+const sound = { engine: null, lastHover: null, lastX: null, lastT: 0, recent: [] };
+
+async function soundEngine() {
+  if (!sound.engine) {
+    const { createSound } = await import("./sound.js");
+    sound.engine = createSound();
+  }
+  return sound.engine;
+}
+
+async function setSound(on) {
+  localStorage.setItem(SOUND_KEY, on ? "on" : "off");
+  if (!on) {
+    sound.engine?.disable();
+    soundSaid.textContent = "sound off.";
+    return;
+  }
+  try {
+    const engine = await soundEngine();
+    await engine.enable();
+    hooks.soundOn?.();
+    soundSaid.textContent =
+      engine.ctx.state === "running"
+        ? "sound on: touch, hover or pass a stroke to hear it."
+        : "sound on: it starts at your first touch or key.";
+  } catch {
+    soundToggle.checked = false;
+    soundSaid.textContent = "sound isn't available in this browser.";
+  }
+}
+soundToggle.addEventListener("change", () => setSound(soundToggle.checked));
+if (localStorage.getItem(SOUND_KEY) === "on") {
+  soundToggle.checked = true;
+  setSound(true);
+  const wake = () => sound.engine?.enable().then(() => hooks.soundOn?.());
+  window.addEventListener("pointerdown", wake, { once: true });
+  window.addEventListener("keydown", wake, { once: true });
+}
+
+// The text twin: what just sounded, at most one line every two seconds.
+let saidTimer = null;
+function said(text) {
+  sound.pending = text;
+  if (saidTimer) return;
+  soundSaid.textContent = sound.pending;
+  saidTimer = setTimeout(function flush() {
+    saidTimer = null;
+    if (sound.pending !== soundSaid.textContent) said(sound.pending);
+  }, 2000);
+}
+
+const ageDays = (mark) => (Date.now() - Date.parse(mark.createdAt)) / 86_400_000;
+
+function play(mark, opts = {}) {
+  if (!soundToggle.checked || !sound.engine) return;
+  const i = state.marks.indexOf(mark);
+  const pan = state.scene && i >= 0 ? (state.lay.positions[i].x - state.scene.x) / 7 : 0;
+  const note = sound.engine.pluck(mark, { ageDays: ageDays(mark), pan, ...opts });
+  if (note) said(`plucked: ${note}, ${mark.note ? `“${mark.note}”` : "a stroke with no note"}, ${timeLabel(mark.createdAt)}${whoSuffix(mark)}`);
+}
+
+hooks.pick.push((mark, { hover }) => {
+  if (hover && sound.lastHover === mark.id) return;
+  sound.lastHover = hover ? mark.id : null;
+  play(mark);
+});
+hooks.focus.push((mark) => play(mark));
+hooks.arrive.push((mark, { live }) => live && play(mark, { gain: 1.2 }));
+
+// Passing a ribbon plucks it: fast travel chatters (short, quiet, capped
+// by the voice limit), slow travel lets each one bloom.
+hooks.camera.push((x) => {
+  const now = performance.now();
+  const prev = sound.lastX;
+  sound.lastX = x;
+  const dt = Math.max(1, now - sound.lastT);
+  sound.lastT = now;
+  if (prev === null || !soundToggle.checked || !sound.engine || hooks.passQuiet?.()) return;
+  const lo = Math.min(prev, x);
+  const hi = Math.max(prev, x);
+  if (hi - lo > 30) return; // a jump, not a pass
+  const speed = Math.min(1, (hi - lo) / dt / 0.02);
+  state.lay.positions.forEach((p, i) => {
+    if (p.x > lo && p.x <= hi) play(state.marks[i], { speed });
+  });
+});
+
 buildPalette();
 loadPad();
 (async () => {

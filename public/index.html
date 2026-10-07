@@ -53,11 +53,13 @@
           <div class="control-row">
             <button type="button" id="prev-stroke">Previous stroke</button>
             <button type="button" id="next-stroke">Next stroke</button>
+            <label class="toggle"><input type="checkbox" id="sound-toggle" /> Sound</label>
             <label class="toggle"><input type="checkbox" id="text-toggle" /> Text view</label>
           </div>
         </div>
 
         <p id="now-at" class="now-at" role="status" aria-live="polite"></p>
+        <p id="sound-said" class="sound-said" aria-live="polite"></p>
         <p id="room-said" class="visually-hidden" aria-live="polite"></p>
 
         <section id="text-panel" class="text-panel" aria-labelledby="text-heading" hidden>
