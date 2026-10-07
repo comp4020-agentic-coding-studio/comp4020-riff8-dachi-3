@@ -75,10 +75,10 @@ it("keeps a hand's past strokes after the server process restarts", async () => 
     });
     const { marks, you } = await res.json();
     expect(you, `hand not recognised after restart; stderr: ${second.stderr()}`).toBe(
-      created.hand,
+      created.handle,
     );
     expect(
-      marks.some((m: { id: number; hand: string }) => m.id === created.id && m.hand === you),
+      marks.some((m: { id: number; handle: string }) => m.id === created.id && m.handle === you),
       "the pre-restart stroke is missing from the post-restart response",
     ).toBe(true);
   } finally {

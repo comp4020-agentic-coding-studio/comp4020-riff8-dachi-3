@@ -95,8 +95,8 @@ it("remembers a hand across requests, and a returning hand can see its own past 
     headers: { cookie: cookie! },
   });
   const { marks, you } = await returned.json();
-  expect(you).toBe(created.hand);
-  expect(marks.some((m: { id: number; hand: string }) => m.id === created.id && m.hand === you)).toBe(
+  expect(you).toBe(created.handle);
+  expect(marks.some((m: { id: number; handle: string }) => m.id === created.id && m.handle === you)).toBe(
     true,
   );
 });
@@ -106,8 +106,7 @@ it("treats a malformed percent-encoded hand cookie as no hand, not a 500", async
     headers: { cookie: "hand=%zz" },
   });
   expect(res.status).toBe(200);
-  const { you } = await res.json();
-  expect(you).toBeNull();
+  expect(firstCookie(res), "a fresh hand should be minted in its place").toMatch(/^hand=[0-9a-f-]{36}$/);
 });
 
 it("treats an oversized hand cookie as no hand, not a stored value, and mints a fresh one", async () => {
@@ -119,8 +118,8 @@ it("treats an oversized hand cookie as no hand, not a stored value, and mints a 
   });
   expect(res.status).toBe(201);
   const created = (await res.json()).mark;
-  expect(created.hand).not.toBe(oversized);
-  expect(created.hand.length).toBeLessThan(oversized.length);
+  expect(created.handle).not.toBe(oversized);
+  expect(created.handle.length).toBeLessThan(oversized.length);
 
   const cookie = firstCookie(res);
   expect(cookie, "a fresh hand cookie should be issued when the supplied one is invalid").toBeTruthy();
@@ -241,7 +240,7 @@ it("refuses to edit or delete a stored stroke, by any method, from the stroke's 
 // someone else's, or slot it anywhere but the end of the scroll.
 it("ignores a hand, id or timestamp a request body tries to set for itself", async () => {
   const before = (await (await fetch(new URL("/api/marks", baseUrl))).json()).marks;
-  const someoneElse = before[0].hand;
+  const someoneElse = before[0].handle;
   const res = await fetch(new URL("/api/marks", baseUrl), {
     method: "POST",
     headers: postHeaders(),
@@ -249,14 +248,16 @@ it("ignores a hand, id or timestamp a request body tries to set for itself", asy
       color: "#8a6d3b",
       note: "forged fields",
       hand: someoneElse,
+      handle: someoneElse,
       id: before[0].id,
       createdAt: "1269-01-01T00:00:00.000Z",
     }),
   });
   expect(res.status).toBe(201);
   const created = (await res.json()).mark;
-  expect(created.hand).not.toBe(someoneElse);
-  expect(created.hand).toBe(firstCookie(res)!.split("=")[1]);
+  expect(created.handle).not.toBe(someoneElse);
+  const mine = await fetch(new URL("/api/marks", baseUrl), { headers: { cookie: firstCookie(res)! } });
+  expect(created.handle).toBe((await mine.json()).you);
   expect(created.id).toBeGreaterThan(Math.max(...before.map((m: { id: number }) => m.id)));
   expect(created.createdAt).not.toBe("1269-01-01T00:00:00.000Z");
 });

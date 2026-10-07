@@ -1,10 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { extname } from "node:path";
+import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
-import { addMark, listMarks } from "./db.ts";
+import { addMark, handleFor, listMarks } from "./db.ts";
 import { validateMark } from "./marks.ts";
 import { renderReadme } from "./readme.ts";
+import { broadcastMark, openStream } from "./live.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const PUBLIC_DIR = new URL("../public/", import.meta.url);
@@ -91,10 +93,109 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-async function serveStatic(res: ServerResponse, filename: string, contentType: string) {
-  const data = await readFile(new URL(filename, PUBLIC_DIR));
-  res.writeHead(200, { "content-type": `${contentType}; charset=utf-8` });
+const TYPES: Record<string, string> = {
+  ".html": "text/html",
+  ".js": "text/javascript",
+  ".css": "text/css",
+  ".txt": "text/plain",
+};
+
+// Only plain names under public/ ("vendor/three/three.core.js"), never a
+// dot-segment or anything the TYPES table doesn't know: a request path is
+// client input like any other.
+const STATIC_PATH = /^(?:[a-z0-9_-]+\/)*[a-z0-9_.-]+$/i;
+
+// Three.js is about 2 MB of source; gzipped once and kept, it is about a
+// fifth of that on the wire, which matters on a phone.
+const gzipCache = new Map<string, Buffer>();
+
+async function serveStatic(req: IncomingMessage, res: ServerResponse, filename: string): Promise<boolean> {
+  const type = TYPES[extname(filename)];
+  if (!type || !STATIC_PATH.test(filename) || filename.split("/").some((s) => s.startsWith("."))) {
+    return false;
+  }
+  let data: Buffer;
+  try {
+    data = await readFile(new URL(filename, PUBLIC_DIR));
+  } catch {
+    return false;
+  }
+  const headers: Record<string, string> = {
+    "content-type": `${type}; charset=utf-8`,
+    "cache-control": filename.startsWith("vendor/") ? "public, max-age=604800" : "no-cache",
+    vary: "accept-encoding",
+  };
+  if (/gzip/.test(String(req.headers["accept-encoding"] ?? "")) && data.length > 1024) {
+    let gz = gzipCache.get(filename);
+    if (!gz) {
+      gz = gzipSync(data);
+      if (filename.startsWith("vendor/")) gzipCache.set(filename, gz);
+    }
+    headers["content-encoding"] = "gzip";
+    data = gz;
+  }
+  res.writeHead(200, headers);
   res.end(data);
+  return true;
+}
+
+function cookieHand(req: IncomingMessage): string | undefined {
+  const hand = parseCookies(req.headers.cookie).hand;
+  return isValidHand(hand) ? hand : undefined;
+}
+
+// The hand is the secret: it rides only in its own HttpOnly cookie, and no
+// response body ever carries it, only the handle derived from it. A browser
+// without one is given one on its first read, so "since you were here" works
+// for someone who has only ever looked.
+function handFor(req: IncomingMessage): { hand: string; setCookie: Record<string, string> } {
+  const existing = cookieHand(req);
+  if (existing) return { hand: existing, setCookie: {} };
+  const hand = randomUUID();
+  const fiveYears = 60 * 60 * 24 * 365 * 5;
+  // HttpOnly: no script on this page ever reads document.cookie. Secure:
+  // fly.toml forces https, so the browser never has an http origin to send
+  // it from anyway.
+  return {
+    hand,
+    setCookie: {
+      "set-cookie": `hand=${hand}; Path=/; Max-Age=${fiveYears}; SameSite=Lax; HttpOnly; Secure`,
+    },
+  };
+}
+
+// Every write endpoint goes through here: same-origin check, the body cap,
+// then a JSON object or nothing. Answers the request itself on failure.
+async function readJsonPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<{ body: Record<string, unknown> } | null> {
+  if (!isSameOrigin(req)) {
+    res.writeHead(403, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "cross-site-request" }));
+    return null;
+  }
+  let raw: string;
+  try {
+    raw = await readBody(req);
+  } catch {
+    res.writeHead(413, { connection: "close" });
+    res.end();
+    req.destroy();
+    return null;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = null;
+  }
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "bad-json" }));
+    return null;
+  }
+  return { body: payload as Record<string, unknown> };
 }
 
 const server = createServer(async (req, res) => {
@@ -123,15 +224,7 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
 
     if (req.method === "GET" && url.pathname === "/") {
-      await serveStatic(res, "index.html", "text/html");
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/app.js") {
-      await serveStatic(res, "app.js", "text/javascript");
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/style.css") {
-      await serveStatic(res, "style.css", "text/css");
+      await serveStatic(req, res, "index.html");
       return;
     }
     if (req.method === "GET" && (url.pathname === "/readme" || url.pathname === "/readme/")) {
@@ -141,69 +234,36 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/marks") {
-      const cookies = parseCookies(req.headers.cookie);
-      const you = isValidHand(cookies.hand) ? cookies.hand : null;
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ marks: listMarks(), you }));
+      const { hand, setCookie } = handFor(req);
+      res.writeHead(200, { ...setCookie, "content-type": "application/json" });
+      res.end(JSON.stringify({ marks: listMarks(), you: handleFor(hand) }));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/events") {
+      const hand = cookieHand(req);
+      openStream(req, res, url, hand ? handleFor(hand) : null, () => {});
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/marks") {
-      if (!isSameOrigin(req)) {
-        res.writeHead(403, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "cross-site-request" }));
-        return;
-      }
+      const payload = await readJsonPost(req, res);
+      if (!payload) return;
+      const { hand, setCookie } = handFor(req);
 
-      const cookies = parseCookies(req.headers.cookie);
-      let hand = isValidHand(cookies.hand) ? cookies.hand : undefined;
-      const headers: Record<string, string> = {};
-      if (!hand) {
-        hand = randomUUID();
-        const fiveYears = 60 * 60 * 24 * 365 * 5;
-        // HttpOnly: no script on this page ever reads document.cookie, so
-        // there's no reason a hand — a five-year bearer token for a store
-        // with no delete path — should be exposed to one. Secure: fly.toml
-        // forces https, so the browser never has an http origin to send it
-        // from anyway.
-        headers["set-cookie"] =
-          `hand=${hand}; Path=/; Max-Age=${fiveYears}; SameSite=Lax; HttpOnly; Secure`;
-      }
-
-      let body: string;
-      try {
-        body = await readBody(req);
-      } catch {
-        res.writeHead(413, { ...headers, connection: "close" });
-        res.end();
-        req.destroy();
-        return;
-      }
-
-      let payload: unknown;
-      try {
-        payload = JSON.parse(body);
-      } catch {
-        res.writeHead(400, { ...headers, "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "bad-json" }));
-        return;
-      }
-      if (typeof payload !== "object" || payload === null) {
-        res.writeHead(400, { ...headers, "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "bad-json" }));
-        return;
-      }
-
-      const validated = validateMark(payload as Record<string, unknown>);
+      const validated = validateMark(payload.body);
       if (!validated.ok) {
-        res.writeHead(422, { ...headers, "content-type": "application/json" });
+        res.writeHead(422, { ...setCookie, "content-type": "application/json" });
         res.end(JSON.stringify({ error: validated.reason }));
         return;
       }
 
       const mark = addMark(hand, validated.note, validated.color);
-      res.writeHead(201, { ...headers, "content-type": "application/json" });
+      broadcastMark(mark);
+      res.writeHead(201, { ...setCookie, "content-type": "application/json" });
       res.end(JSON.stringify({ mark }));
       return;
+    }
+    if (req.method === "GET" && !url.pathname.startsWith("/api/")) {
+      if (await serveStatic(req, res, url.pathname.slice(1))) return;
     }
 
     res.writeHead(404, { "content-type": "text/plain" });
