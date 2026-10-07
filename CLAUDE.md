@@ -44,27 +44,35 @@ these, the README's argument has to change first, not the other way round.
   the README, not an implementation detail; a future feature that needs
   editing needs a new argument first.
 - Never accept a stroke whose colour isn't one of the six the palette
-  offers, or a note over 140 characters, regardless of what a request
-  claims a browser can't send. Validate server-side; never trust the
-  `<input>`'s own `maxlength` or the radio group's own values.
+  offers, a note over 140 characters, or geometry that isn't a known shape
+  or 1--96 integer points in the box, regardless of what a request claims a
+  browser can't send. Validate server-side, and validate relayed pen points
+  as strictly as stored paths.
 - Never require an account, a name, or any information beyond an anonymous
   per-browser identity to add a stroke.
-- Never accept a stroke from a cross-site request. A write with no edit or
-  delete path is permanent, so a drive-by page silently posting on a
+- Never accept a cross-site write, on any POST route. A write with no edit
+  or delete path is permanent, so a drive-by page silently posting on a
   visitor's behalf is as serious as a bad value in the fields themselves.
+- Never put the secret `hand` cookie in a response body or a broadcast;
+  show only the salted public handle.
+- Never pass a resident's stroke off as a person's: always labelled.
 
 ## What every page must hold to
 
 - `/` and `/readme/` both answer 200; `/readme/` publishes `README.md` in
   full, headings intact, since the spec checks this and a visitor is meant
   to read it before using the app.
-- No element's only signal is colour. A stroke's ink is decorative; the
-  note, timestamp, and a `— yours` suffix are always present as text.
+- No element's only signal is colour or sound. A stroke's ink is
+  decorative; the note, timestamp, and `— yours` / `— resident` are always
+  present as text, and every sound is captioned.
+- The 3D view is never the only way in: Text view lists every stroke, and
+  without WebGL it is the whole app.
 - Every interactive control is a native, labelled form element reachable by
   keyboard alone.
 
 ## What a change must not break
 
-- The scroll persists across a restart: it's read fresh from SQLite on
-  `/api/marks`, not held in memory.
+- The scroll persists across a restart: strokes, handles, the hash chain
+  and last visits are read from SQLite. Only presence and pen trails live in
+  memory.
 - `pnpm check` and `pnpm check:evidence` pass before a commit.

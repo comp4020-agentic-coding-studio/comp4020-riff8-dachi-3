@@ -21,12 +21,29 @@ throwaway `/data`, and a red run blocks the deploy. Locally, start the app
 however you run it and `pnpm check` finds it at `APP_URL` (default
 `http://localhost:8080`). Keep them; don't delete them.
 
-## Your checks
+## This app's checks
 
-Everything else in `spec/` is yours to write. Any `spec/*.test.ts` runs with
-`pnpm check`, against the same running app. Some lines of a spec only a person
-can judge; those are left to the crit and the marker.
+Everything else in `spec/` encodes the handscroll brief. Like the invariants,
+every file runs against the running app over HTTP. `page.test.ts` also loads
+the served page into jsdom; jsdom has no WebGL, so what it tests is the Text
+view fallback, never the 3D scene.
 
-At a crit, a green `check` job is half the shipped mark, but it's never the
-judgement of the work: your tutor checks what you deployed against the published
-spec.
+- `marks.test.ts`: validation of colour, note and geometry, including hostile
+  bodies; the body cap; cross-site and Origin-less POSTs refused; PUT, PATCH
+  and DELETE refused; hand cookies decoded and shape-checked; security headers
+  on every response.
+- `live.test.ts`: a second SSE window gets a new stroke within a second;
+  `Last-Event-ID` replay; the secret hand never appears in a body; a spoofed
+  handle doesn't impersonate; presence join and leave; pen relay, validation,
+  cross-site refusal and rate limit; last visits; the hash chain.
+- `persistence.test.ts`: strokes, handles and last visits survive a restart,
+  using two servers it starts itself against a throwaway `DATA_DIR`.
+- `page.test.ts`: without WebGL, the Text view lists every stroke with its
+  note, time and "— yours"; every control is a native, labelled element in
+  the tab order.
+- `living.test.ts`: Living Ink is deterministic and grows monotonically.
+- `residents.test.ts`: resident strokes always pass the server's own
+  validation.
+
+Some lines of the brief only a person can judge (whether it feels like one
+continuous object); `README.md` says which.
