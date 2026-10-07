@@ -856,6 +856,37 @@ function openHash() {
 }
 window.addEventListener("hashchange", openHash);
 
+// --- verify the scroll ---------------------------------------------------
+
+// Each stroke carries a link in a hash chain: sha256 of the previous link
+// plus its own public fields (src/db.ts). Recomputing every link here, from
+// nothing but what the server sent, shows no earlier stroke has changed;
+// noting the newest link lets a visitor check that again on a later visit.
+async function sha256(text) {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+$("verify").addEventListener("click", async () => {
+  if (!crypto?.subtle) {
+    nowAt.textContent = "This browser can't compute the hashes needed to verify the scroll.";
+    return;
+  }
+  nowAt.textContent = "Verifying the scroll…";
+  let prev = "long-scroll";
+  for (const [i, m] of state.marks.entries()) {
+    const link = await sha256(prev + JSON.stringify([m.id, m.handle, m.note, m.color, m.createdAt, m.path, m.seed]));
+    if (link !== m.hash) {
+      nowAt.textContent = `The chain breaks at stroke ${i + 1} (${describe(m)}): it doesn't match what came before.`;
+      return;
+    }
+    prev = link;
+  }
+  nowAt.textContent = state.marks.length
+    ? `All ${state.marks.length} strokes check out: the hash chain is unbroken from the first stroke to the newest, whose link begins ${prev.slice(0, 12)}.`
+    : "Nothing to verify yet: the scroll is empty.";
+});
+
 buildPalette();
 loadPad();
 (async () => {

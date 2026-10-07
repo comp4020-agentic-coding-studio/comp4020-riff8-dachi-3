@@ -21,6 +21,7 @@ export interface PublicMark {
   path: Point[];
   seed: number;
   resident?: string;
+  hash: string;
 }
 
 interface Row {
@@ -31,6 +32,7 @@ interface Row {
   createdAt: string;
   path: string | null;
   seed: number | null;
+  hash?: string | null;
 }
 
 const dbPath = process.env.DATA_DIR
@@ -52,6 +54,10 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS chain (
+    mark_id INTEGER PRIMARY KEY,
+    hash TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS last_seen (
     hand TEXT PRIMARY KEY,
@@ -90,12 +96,14 @@ const insertStmt = db.prepare(
   "INSERT INTO marks (hand, note, color, created_at, path, seed) VALUES (?, ?, ?, ?, ?, ?)",
 );
 const COLUMNS = "id, hand, note, color, created_at AS createdAt, path, seed";
-const selectAllStmt = db.prepare(`SELECT ${COLUMNS} FROM marks ORDER BY id ASC`);
-const selectAfterStmt = db.prepare(`SELECT ${COLUMNS} FROM marks WHERE id > ? ORDER BY id ASC`);
+const CHAIN_JOIN = "LEFT JOIN chain ON chain.mark_id = marks.id";
+const SELECT = `SELECT ${COLUMNS.replace("id,", "marks.id AS id,")}, chain.hash AS hash FROM marks ${CHAIN_JOIN}`;
+const selectAllStmt = db.prepare(`${SELECT} ORDER BY marks.id ASC`);
+const selectAfterStmt = db.prepare(`${SELECT} WHERE marks.id > ? ORDER BY marks.id ASC`);
 
 function toPublic(row: Row): PublicMark {
   const seed = row.seed ?? seedForId(row.id);
-  return {
+  const mark = {
     id: row.id,
     handle: handleFor(row.hand),
     note: row.note,
@@ -105,6 +113,30 @@ function toPublic(row: Row): PublicMark {
     seed,
     ...(residentName(row.hand) ? { resident: residentName(row.hand)! } : {}),
   };
+  return { ...mark, hash: row.hash ?? "" };
+}
+
+// The hash chain: each stroke's link is sha256(previous link + the stroke's
+// public fields), so a visitor's browser can recompute the whole chain from
+// what /api/marks serves and see that nothing before the newest stroke has
+// changed. Kept in its own append-only table; strokes from before the chain
+// existed are linked once, in order, at startup.
+export const GENESIS = "long-scroll";
+
+export function canonical(m: Omit<PublicMark, "hash" | "resident">): string {
+  return JSON.stringify([m.id, m.handle, m.note, m.color, m.createdAt, m.path, m.seed]);
+}
+
+function link(prev: string, m: Omit<PublicMark, "hash" | "resident">): string {
+  return createHash("sha256").update(prev + canonical(m)).digest("hex");
+}
+
+const headStmt = db.prepare("SELECT hash FROM chain ORDER BY mark_id DESC LIMIT 1");
+const insertLinkStmt = db.prepare("INSERT INTO chain (mark_id, hash) VALUES (?, ?)");
+const head = (): string => (headStmt.get() as { hash: string } | undefined)?.hash ?? GENESIS;
+
+for (const row of db.prepare(`${SELECT} WHERE chain.hash IS NULL ORDER BY marks.id ASC`).all() as unknown as Row[]) {
+  insertLinkStmt.run(row.id, link(head(), toPublic(row)));
 }
 
 export function addMark(hand: string, note: string, color: string, geometry: Geometry): PublicMark {
@@ -113,7 +145,10 @@ export function addMark(hand: string, note: string, color: string, geometry: Geo
   const path = "path" in geometry ? geometry.path : (shapePath(geometry.shape, seed) as Point[]);
   const pathJson = JSON.stringify(path);
   const result = insertStmt.run(hand, note, color, createdAt, pathJson, seed);
-  return toPublic({ id: Number(result.lastInsertRowid), hand, note, color, createdAt, path: pathJson, seed });
+  const row: Row = { id: Number(result.lastInsertRowid), hand, note, color, createdAt, path: pathJson, seed };
+  const hash = link(head(), toPublic(row));
+  insertLinkStmt.run(row.id, hash);
+  return toPublic({ ...row, hash });
 }
 
 export function listMarks(): PublicMark[] {

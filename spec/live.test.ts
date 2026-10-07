@@ -189,3 +189,18 @@ it("tells a returning browser when it was last here, and nobody else", async () 
   const stranger = await (await fetch(at("/api/marks"))).json();
   expect(stranger.lastVisit).toBeNull();
 });
+
+// The hash chain makes "append-only" checkable: recomputing every link from
+// the served fields alone has to reproduce the served hashes, in order.
+it("serves an unbroken hash chain over every stroke", async () => {
+  const { createHash } = await import("node:crypto");
+  const { marks } = await (await fetch(at("/api/marks"))).json();
+  let prev = "long-scroll";
+  for (const m of marks) {
+    const link = createHash("sha256")
+      .update(prev + JSON.stringify([m.id, m.handle, m.note, m.color, m.createdAt, m.path, m.seed]))
+      .digest("hex");
+    expect(m.hash, `stroke ${m.id}`).toBe(link);
+    prev = link;
+  }
+});
