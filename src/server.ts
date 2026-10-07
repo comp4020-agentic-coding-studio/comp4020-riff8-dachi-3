@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { addMark, handleFor, lastSeen, listMarks, markSeen } from "./db.ts";
 import { validateMark } from "./marks.ts";
 import { renderReadme } from "./readme.ts";
+import { startResidents } from "./residents.ts";
 import { allow, broadcastMark, clientForKey, heartbeat, openStream, penUpdate } from "./live.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -326,6 +327,8 @@ const server = createServer(async (req, res) => {
 server.on("clientError", (_err, socket) => {
   socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
 });
+
+startResidents();
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`long scroll listening on 0.0.0.0:${PORT}`);

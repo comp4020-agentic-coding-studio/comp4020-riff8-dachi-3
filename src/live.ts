@@ -75,6 +75,13 @@ function broadcastHere(): void {
   broadcast("here", presenceList());
 }
 
+// When the longest-open window arrived, or null if nobody is here.
+export function firstJoinedAt(): number | null {
+  let first: number | null = null;
+  for (const c of clients.values()) first = first === null ? c.joinedAt : Math.min(first, c.joinedAt);
+  return first;
+}
+
 export function clientCount(): number {
   return clients.size;
 }

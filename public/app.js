@@ -114,7 +114,14 @@ function listItem(mark) {
   return li;
 }
 
+function renderHint() {
+  $("world-hint").textContent = state.marks.length
+    ? "drag or scroll to travel · touch a stroke to hear it"
+    : "the paper is still blank · draw the first stroke below";
+}
+
 function renderList() {
+  renderHint();
   scrollList.replaceChildren(...(state.marks.length ? state.marks.map(listItem) : [emptyNotice]));
 }
 
@@ -300,7 +307,10 @@ function addMark(mark, { live = true } = {}) {
   state.byId.set(mark.id, mark);
   state.marks.push(mark);
   state.marks.sort((a, b) => a.id - b.id);
-  if (state.marks.length === 1) scrollList.replaceChildren();
+  if (state.marks.length === 1) {
+    scrollList.replaceChildren();
+    renderHint();
+  }
   const li = listItem(mark);
   const after = scrollList.querySelector(`[data-id="${state.marks[state.marks.indexOf(mark) - 1]?.id}"]`);
   if (after) after.after(li);

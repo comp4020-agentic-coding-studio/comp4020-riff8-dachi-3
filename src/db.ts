@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { defaultPath, seedForId, shapePath } from "../public/lib/shapes.js";
 import type { Geometry, Point } from "./marks.ts";
+import { residentName } from "./resident-hands.ts";
 
 // What a stroke looks like to anyone but the server: `hand` (the secret
 // cookie value) is replaced by `handle`, a one-way digest of it.
@@ -19,6 +20,7 @@ export interface PublicMark {
   createdAt: string;
   path: Point[];
   seed: number;
+  resident?: string;
 }
 
 interface Row {
@@ -101,6 +103,7 @@ function toPublic(row: Row): PublicMark {
     createdAt: row.createdAt,
     path: row.path ? (JSON.parse(row.path) as Point[]) : (defaultPath(seed) as Point[]),
     seed,
+    ...(residentName(row.hand) ? { resident: residentName(row.hand)! } : {}),
   };
 }
 
@@ -136,3 +139,17 @@ export function lastSeen(hand: string): string | null {
 export function markSeen(hand: string): void {
   putSeenStmt.run(hand, new Date().toISOString());
 }
+
+const countSinceStmt = db.prepare("SELECT COUNT(*) AS n FROM marks WHERE created_at > ?");
+const countResidentStmt = db.prepare(
+  "SELECT COUNT(*) AS n FROM marks WHERE created_at > ? AND hand LIKE 'resident:%'",
+);
+const lastResidentStmt = db.prepare(
+  "SELECT MAX(created_at) AS at FROM marks WHERE hand LIKE 'resident:%'",
+);
+
+export const countSince = (iso: string): number => (countSinceStmt.get(iso) as { n: number }).n;
+export const countResidentSince = (iso: string): number =>
+  (countResidentStmt.get(iso) as { n: number }).n;
+export const lastResidentAt = (): string | null =>
+  (lastResidentStmt.get() as { at: string | null }).at;
