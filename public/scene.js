@@ -430,6 +430,7 @@ export function createScene(canvas, callbacks = {}) {
   boundary.visible = false;
   scene.add(boundary);
 
+  const extraFrames = new Set();
   const ribbons = new Map(); // id -> { group, mesh, pos, mark, hi, lo, lod }
   const ribbonList = [];
   let you = null;
@@ -658,7 +659,6 @@ export function createScene(canvas, callbacks = {}) {
     });
   }
 
-  const extraFrames = new Set();
   function frame() {
     frameRequested = false;
     if (!running) return;
@@ -707,6 +707,101 @@ export function createScene(canvas, callbacks = {}) {
   window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", requestFrame);
   new ResizeObserver(resize).observe(canvas);
   resize();
+
+  // --- the room: a lantern per person here, a glowing trail per pen -----
+
+  const lanternMaterial = (color, opacity) =>
+    new THREE.SpriteMaterial({ map: dot, color, transparent: true, opacity: 0, depthWrite: false, fog: false });
+  const lanterns = new Map(); // pid -> { group, halo, core, x, target, fade, seed }
+  function setPresence(list) {
+    const seen = new Set();
+    for (const { pid, x } of list) {
+      seen.add(pid);
+      let l = lanterns.get(pid);
+      if (!l) {
+        const halo = new THREE.Sprite(lanternMaterial(0xe39a45));
+        halo.scale.set(1.5, 1.5, 1);
+        const core = new THREE.Sprite(lanternMaterial(0xfff1cf));
+        core.scale.set(0.34, 0.34, 1);
+        const group = new THREE.Group();
+        group.add(halo, core);
+        group.renderOrder = 6;
+        const seed = [...pid].reduce((a, c) => a * 31 + c.charCodeAt(0), 7) >>> 0;
+        l = { group, halo, core, x, fade: 0, alive: true, seed };
+        group.position.set(x, 2.9, -1.6);
+        scene.add(group);
+        lanterns.set(pid, l);
+      }
+      l.x = x;
+      l.alive = true;
+    }
+    for (const [pid, l] of lanterns) if (!seen.has(pid)) l.alive = false;
+    requestFrame();
+  }
+
+  const pens = new Map(); // pid -> { points, color, mesh, tip, x, z }
+  const penMaterialFor = (color) =>
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false });
+  function penTrail(pid, color, points, start) {
+    let pen = pens.get(pid);
+    if (!pen || start) {
+      if (pen) endPen(pid);
+      const seed = [...pid].reduce((a, c) => a * 31 + c.charCodeAt(0), 7) >>> 0;
+      const tip = new THREE.Sprite(lanternMaterial(0xe39a45));
+      tip.scale.set(0.9, 0.9, 1);
+      tip.material.opacity = 0.75;
+      const group = new THREE.Group();
+      group.position.set(extent.openEnd - 2.2, 0, ((seed % 100) / 100 - 0.5) * 2);
+      group.add(tip);
+      scene.add(group);
+      pen = { points: [], color, mesh: null, tip, group, seed };
+      pens.set(pid, pen);
+    }
+    pen.points.push(...points);
+    pen.color = color;
+    if (pen.mesh) {
+      pen.group.remove(pen.mesh);
+      pen.mesh.geometry.dispose();
+      pen.mesh.material.dispose();
+    }
+    if (pen.points.length >= 2) {
+      const local = toLocal(pen.points, pen.seed);
+      pen.mesh = new THREE.Mesh(ribbonGeometry(local, pen.seed, Math.min(120, local.length * 2), 0, 0.45), penMaterialFor(color));
+      pen.group.add(pen.mesh);
+      pen.tip.position.copy(local[local.length - 1]);
+    }
+    requestFrame();
+  }
+  function endPen(pid) {
+    const pen = pens.get(pid);
+    if (!pen) return;
+    scene.remove(pen.group);
+    pen.mesh?.geometry.dispose();
+    pen.mesh?.material.dispose();
+    pens.delete(pid);
+    requestFrame();
+  }
+
+  extraFrames.add((t, motion) => {
+    let busy = false;
+    for (const [pid, l] of lanterns) {
+      // lanterns drift to where their person is looking, and fade in and out
+      l.fade += ((l.alive ? 1 : 0) - l.fade) * (motion ? 0.03 : 1);
+      l.group.position.x += (l.x - l.group.position.x) * (motion ? 0.04 : 1);
+      l.group.position.y = 2.9 + (motion ? Math.sin(t * 0.8 + l.seed) * 0.15 : 0);
+      l.halo.material.opacity = 0.55 * l.fade * (motion ? 0.85 + 0.15 * Math.sin(t * 2.1 + l.seed) : 1);
+      l.core.material.opacity = 0.95 * l.fade;
+      if (!l.alive && l.fade < 0.01) {
+        scene.remove(l.group);
+        lanterns.delete(pid);
+      }
+      if (Math.abs(l.x - l.group.position.x) > 0.01 || (l.alive ? l.fade < 0.99 : true)) busy = true;
+    }
+    for (const pen of pens.values()) {
+      if (pen.mesh) pen.mesh.material.opacity = 0.6 + (motion ? 0.25 * Math.sin(t * 5) : 0.2);
+    }
+    if (busy || pens.size) requestFrame();
+  });
 
   const projected = new THREE.Vector3();
 
@@ -795,6 +890,8 @@ export function createScene(canvas, callbacks = {}) {
       return () => extraFrames.delete(fn);
     },
     requestFrame,
-    softDot: dot,
+    setPresence,
+    penTrail,
+    endPen,
   };
 }

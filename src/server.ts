@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { addMark, handleFor, listMarks } from "./db.ts";
 import { validateMark } from "./marks.ts";
 import { renderReadme } from "./readme.ts";
-import { broadcastMark, openStream } from "./live.ts";
+import { allow, broadcastMark, clientForKey, heartbeat, openStream, penUpdate } from "./live.ts";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const PUBLIC_DIR = new URL("../public/", import.meta.url);
@@ -249,6 +249,11 @@ const server = createServer(async (req, res) => {
       if (!payload) return;
       const { hand, setCookie } = handFor(req);
 
+      if (!allow(`marks:${hand}`, 0.2, 8)) {
+        res.writeHead(429, { ...setCookie, "content-type": "application/json", "retry-after": "5" });
+        res.end(JSON.stringify({ error: "too-many-strokes" }));
+        return;
+      }
       const validated = validateMark(payload.body);
       if (!validated.ok) {
         res.writeHead(422, { ...setCookie, "content-type": "application/json" });
@@ -257,9 +262,37 @@ const server = createServer(async (req, res) => {
       }
 
       const mark = addMark(hand, validated.note, validated.color, validated.geometry);
-      broadcastMark(mark);
+      broadcastMark(mark, clientForKey(payload.body.key));
       res.writeHead(201, { ...setCookie, "content-type": "application/json" });
       res.end(JSON.stringify({ mark }));
+      return;
+    }
+    if (req.method === "POST" && (url.pathname === "/api/here" || url.pathname === "/api/pen")) {
+      const payload = await readJsonPost(req, res);
+      if (!payload) return;
+      // The key comes from this window's own stream (its hello event), so
+      // only that window can move its light or draw its pen trail.
+      const client = clientForKey(payload.body.key);
+      if (!client) {
+        res.writeHead(409, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "no-such-window" }));
+        return;
+      }
+      const hand = cookieHand(req) ?? "none";
+      if (!allow(`pen:${client.key}`, 20, 40) || !allow(`pen-hand:${hand}`, 40, 80)) {
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+        res.end(JSON.stringify({ error: "slow-down" }));
+        return;
+      }
+      if (url.pathname === "/api/here") {
+        heartbeat(client, payload.body.pos);
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      const result = penUpdate(client, payload.body);
+      res.writeHead(result.ok ? 204 : 422, { "content-type": "application/json" });
+      res.end(result.ok ? undefined : JSON.stringify({ error: result.reason }));
       return;
     }
     if (req.method === "GET" && !url.pathname.startsWith("/api/")) {

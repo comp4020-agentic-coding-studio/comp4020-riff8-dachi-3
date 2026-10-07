@@ -87,3 +87,84 @@ it("does not let someone else's public handle, sent as a cookie, make you them",
   );
   expect((await posted.json()).mark.handle).not.toBe(mark.handle);
 });
+
+// Presence and pen trails: in memory only, keyed to one open window by the
+// key its own stream handed it, and validated like everything else.
+async function windowOpen() {
+  const stream = await openEvents();
+  const hello = await stream.waitFor((e) => e.event === "hello");
+  return { stream, ...(hello.data as { pid: string; key: string }) };
+}
+
+it("shows a second window to the first, and says when it leaves", async () => {
+  const a = await windowOpen();
+  const b = await windowOpen();
+  try {
+    const here = (e: { event: string; data: unknown }) =>
+      e.event === "here" && (e.data as { pid: string }[]).some((p) => p.pid === b.pid);
+    const seen = await a.stream.waitFor(here, 1000);
+    for (const p of seen.data as Record<string, unknown>[]) expect(Object.keys(p).sort()).toEqual(["drawing", "pid", "pos"]);
+    b.stream.close();
+    await a.stream.waitFor(
+      (e) => e.event === "here" && e !== seen && !(e.data as { pid: string }[]).some((p) => p.pid === b.pid),
+      2000,
+    );
+  } finally {
+    a.stream.close();
+    b.stream.close();
+  }
+});
+
+it("relays a pen trail to another window, and a stroke from that pen names it", async () => {
+  const drawer = await windowOpen();
+  const watcher = await windowOpen();
+  try {
+    const pen = await post("/api/pen", { key: drawer.key, color: "#3a5a6b", points: [[10, 10], [20, 30]], start: true });
+    expect(pen.status).toBe(204);
+    const trail = await watcher.stream.waitFor((e) => e.event === "pen" && (e.data as { pid: string }).pid === drawer.pid, 1000);
+    expect((trail.data as { points: number[][] }).points).toEqual([[10, 10], [20, 30]]);
+
+    const note = `from a pen ${randomUUID()}`;
+    await post("/api/marks", { key: drawer.key, color: "#3a5a6b", note, path: [[10, 10], [20, 30]] });
+    const mark = await watcher.stream.waitFor(markEvent(note), 1000);
+    expect((mark.data as { from: string }).from).toBe(drawer.pid);
+  } finally {
+    drawer.stream.close();
+    watcher.stream.close();
+  }
+});
+
+it("refuses pen and presence posts from no window, another site, or with hostile points", async () => {
+  const w = await windowOpen();
+  try {
+    expect((await post("/api/pen", { key: "nope", color: "#3a5a6b", points: [[1, 1]] })).status).toBe(409);
+    for (const points of [[], [[1, 1001]], [[1.5, 2]], "1,1", Array.from({ length: 33 }, () => [1, 1])]) {
+      const res = await post("/api/pen", { key: w.key, color: "#3a5a6b", points });
+      expect(res.status, JSON.stringify(points)).toBe(422);
+    }
+    expect((await post("/api/pen", { key: w.key, color: "#ffffff", points: [[1, 1]] })).status).toBe(422);
+    for (const path of ["/api/pen", "/api/here"]) {
+      const res = await fetch(at(path), {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://attacker.example" },
+        body: JSON.stringify({ key: w.key, color: "#3a5a6b", points: [[1, 1]], pos: 0.5 }),
+      });
+      expect(res.status, path).toBe(403);
+    }
+    expect((await post("/api/here", { key: w.key, pos: 0.25 })).status).toBe(204);
+  } finally {
+    w.stream.close();
+  }
+});
+
+it("rate limits a pen that posts faster than any hand draws", async () => {
+  const w = await windowOpen();
+  try {
+    const statuses = await Promise.all(
+      Array.from({ length: 80 }, () => post("/api/pen", { key: w.key, color: "#3a5a6b", points: [[5, 5]] }).then((r) => r.status)),
+    );
+    expect(statuses).toContain(429);
+  } finally {
+    w.stream.close();
+  }
+});

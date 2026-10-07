@@ -566,6 +566,94 @@ hooks.camera.push((x) => {
   });
 });
 
+// --- the room: who's here, and their pens --------------------------------
+
+const hereCount = $("here-count");
+const roomSaid = $("room-said");
+const room = { here: [], known: null, lastPos: null, beatTimer: null };
+
+function post(path, body) {
+  return fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ key: live.key, ...body }),
+  }).catch(() => null);
+}
+
+function currentPos() {
+  return state.scene ? Math.max(0, Math.min(1, positionForX(state.scene.x) / 1000)) : 1;
+}
+
+function beat() {
+  if (!live.key) return;
+  room.lastPos = currentPos();
+  post("/api/here", { pos: room.lastPos });
+}
+
+function renderRoom(list) {
+  room.here = list;
+  const n = list.length;
+  const drawing = list.filter((p) => p.drawing && p.pid !== live.pid).length;
+  hereCount.textContent =
+    (n <= 1 ? "just you here" : `${n} here now`) + (drawing ? ` · ${drawing === 1 ? "someone is" : `${drawing} are`} drawing` : "");
+  // Arrivals and departures, said politely, once per change.
+  const ids = new Set(list.map((p) => p.pid));
+  if (room.known) {
+    const came = [...ids].filter((id) => !room.known.has(id)).length;
+    const went = [...room.known].filter((id) => !ids.has(id)).length;
+    if (came) roomSaid.textContent = `${came === 1 ? "someone arrived" : `${came} people arrived`} — ${n} here now.`;
+    else if (went) roomSaid.textContent = `${went === 1 ? "someone left" : `${went} people left`} — ${n} here now.`;
+  }
+  room.known = ids;
+  if (state.scene) {
+    state.scene.setPresence(
+      list.filter((p) => p.pid !== live.pid).map((p) => ({ pid: p.pid, x: xForPosition(p.pos * 1000) + 0.5 })),
+    );
+  }
+  if (soundToggle.checked && sound.engine) sound.engine.setDrone(list.map((p) => p.pid));
+}
+
+onLive("hello", (data) => {
+  room.known = null;
+  renderRoom(data.here);
+  clearInterval(room.beatTimer);
+  room.beatTimer = setInterval(beat, 20_000);
+});
+onLive("here", renderRoom);
+onLive("pen", (data) => {
+  if (!state.scene || data.pid === live.pid) return;
+  if (data.end) state.scene.endPen(data.pid);
+  else state.scene.penTrail(data.pid, data.color, data.points, data.start);
+});
+hooks.soundOn = () => sound.engine.setDrone(room.here.map((p) => p.pid));
+
+// Moving tells the others where your lantern is, at most every two seconds.
+let posTimer = null;
+hooks.camera.push(() => {
+  if (posTimer || !live.key) return;
+  posTimer = setTimeout(() => {
+    posTimer = null;
+    if (Math.abs(currentPos() - (room.lastPos ?? -1)) > 0.003) beat();
+  }, 2000);
+});
+
+// Your pen, relayed to everyone else as you draw.
+let penStarted = false;
+hooks.penStart = () => {
+  penStarted = true;
+};
+hooks.penPoints = (points) => {
+  if (!live.key) return;
+  for (let i = 0; i < points.length; i += 32) {
+    post("/api/pen", { color: selectedColor(), points: points.slice(i, i + 32), start: penStarted && i === 0 });
+    penStarted = false;
+  }
+};
+hooks.penCancel = () => live.key && post("/api/pen", { end: true });
+
+// A stroke that came from someone's pen replaces their glowing trail.
+hooks.arrive.push((mark) => mark.from && state.scene?.endPen(mark.from));
+
 buildPalette();
 loadPad();
 (async () => {
