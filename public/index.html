@@ -56,6 +56,17 @@
             <label class="toggle"><input type="checkbox" id="sound-toggle" /> Sound</label>
             <label class="toggle"><input type="checkbox" id="text-toggle" /> Text view</label>
           </div>
+          <div class="control-row" id="play-controls">
+            <button type="button" id="play">Play from the beginning</button>
+            <label for="play-speed">Speed</label>
+            <select id="play-speed">
+              <option value="3600000">an hour a second</option>
+              <option value="86400000" selected>a day a second</option>
+              <option value="604800000">a week a second</option>
+            </select>
+            <button type="button" id="stop">Stop</button>
+            <a id="share-link" href="#">Link to this spot</a>
+          </div>
         </div>
 
         <p id="now-at" class="now-at" role="status" aria-live="polite"></p>

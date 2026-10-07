@@ -100,7 +100,10 @@ function listItem(mark) {
   text.className = "mark__text";
   text.textContent = describe(mark);
   button.append(stroke, text);
-  button.addEventListener("click", () => bringIntoView(mark.id));
+  button.addEventListener("click", () => {
+    hooks.userMove?.();
+    bringIntoView(mark.id);
+  });
   li.append(button);
   return li;
 }
@@ -412,8 +415,14 @@ form.addEventListener("submit", async (event) => {
 textToggle.addEventListener("change", () => {
   textPanel.hidden = !textToggle.checked;
 });
-$("prev-stroke").addEventListener("click", () => step(-1));
-$("next-stroke").addEventListener("click", () => step(1));
+$("prev-stroke").addEventListener("click", () => {
+  hooks.userMove?.();
+  step(-1);
+});
+$("next-stroke").addEventListener("click", () => {
+  hooks.userMove?.();
+  step(1);
+});
 positionInput.addEventListener("input", () => {
   if (!state.scene) return;
   state.scene.goTo(xForPosition(Number(positionInput.value)));
@@ -487,7 +496,7 @@ function showScroll() {
   state.scene.setClockOffset(state.clockOffset ?? 0);
   state.scene.setMarks(state.marks, state.lay);
   hooks.sceneReady?.();
-  if (!hooks.initialView?.()) state.scene.goTo(openingX(), { instant: true });
+  if (!openHash() && !hooks.initialView?.()) state.scene.goTo(openingX(), { instant: true });
 }
 
 // --- sound ---------------------------------------------------------------
@@ -672,6 +681,112 @@ hooks.penCancel = () => live.key && post("/api/pen", { end: true });
 
 // A stroke that came from someone's pen replaces their glowing trail.
 hooks.arrive.push((mark) => mark.from && state.scene?.endPen(mark.from));
+
+// --- play the scroll -----------------------------------------------------
+
+// The camera flies from the first stroke to now with time compressed, each
+// stroke growing and sounding as the camera reaches it, so the community's
+// real rhythm is the music. Bounded: never under 8 s or over 90 s.
+const playButton = $("play");
+const stopButton = $("stop");
+const speedSelect = $("play-speed");
+const shareLink = $("share-link");
+const playback = { active: false, raf: 0, start: 0, t0: 0, t1: 0, rate: 1, next: 0 };
+
+// Where along the scroll a moment in time sits, between the strokes either side.
+function xForTime(t) {
+  const ps = state.lay.positions;
+  if (ps.length === 0) return state.lay.openEnd;
+  if (t <= ps[0].t) return ps[0].x;
+  for (let i = 1; i < ps.length; i++) {
+    if (t <= ps[i].t) {
+      const k = (t - ps[i - 1].t) / Math.max(1, ps[i].t - ps[i - 1].t);
+      return ps[i - 1].x + (ps[i].x - ps[i - 1].x) * k;
+    }
+  }
+  return ps[ps.length - 1].x;
+}
+
+function startPlayback() {
+  if (!state.scene || state.marks.length === 0) return;
+  stopPlayback(false);
+  const ps = state.lay.positions;
+  const span = ps[ps.length - 1].t - ps[0].t;
+  const wanted = span / Number(speedSelect.value);
+  const seconds = Math.max(8, Math.min(90, Math.max(wanted, state.marks.length * 0.35)));
+  Object.assign(playback, { active: true, start: performance.now(), t0: ps[0].t, t1: ps[ps.length - 1].t, next: 0 });
+  playback.rate = Math.max(1, span) / (seconds * 1000);
+  for (const m of state.marks) state.scene.setHidden(m.id, true);
+  state.scene.goTo(ps[0].x - 2, { instant: true });
+  nowAt.textContent = `Playing the scroll from ${timeLabel(state.marks[0].createdAt)}, about ${Math.round(seconds)} seconds.`;
+  playback.raf = requestAnimationFrame(tick);
+}
+
+function tick(now) {
+  if (!playback.active) return;
+  const simT = playback.t0 + (now - playback.start) * playback.rate;
+  while (playback.next < state.marks.length && state.lay.positions[playback.next].t <= simT) {
+    const mark = state.marks[playback.next];
+    state.scene.setHidden(mark.id, false, { grow: true });
+    play(mark, { gain: 1.1 });
+    playback.next++;
+  }
+  state.scene.goTo(xForTime(simT) - 0.3);
+  if (playback.next >= state.marks.length) {
+    stopPlayback(true);
+    return;
+  }
+  playback.raf = requestAnimationFrame(tick);
+}
+
+function stopPlayback(finished) {
+  if (!playback.active) return;
+  playback.active = false;
+  cancelAnimationFrame(playback.raf);
+  for (const m of state.marks) state.scene.setHidden(m.id, false);
+  nowAt.textContent = finished ? "Played to the open end — this is now." : "Stopped.";
+}
+
+playButton.addEventListener("click", startPlayback);
+stopButton.addEventListener("click", () => stopPlayback(false));
+hooks.userMove = () => stopPlayback(false);
+// During playback the reveal plucks each stroke itself; passing is quiet.
+hooks.passQuiet = () => playback.active;
+
+// --- links to a spot -----------------------------------------------------
+
+let linkTimer = null;
+hooks.camera.push((x) => {
+  clearTimeout(linkTimer);
+  linkTimer = setTimeout(() => {
+    const i = indexNear(x);
+    shareLink.href = i < 0 ? "#" : `#stroke=${state.marks[i].id}`;
+  }, 300);
+});
+
+// #stroke=<id> opens at that stroke; #t=<ISO time or epoch ms> at that moment.
+function openHash() {
+  if (!state.scene) return false;
+  const params = new URLSearchParams(location.hash.slice(1));
+  const id = Number(params.get("stroke"));
+  if (params.has("stroke") && state.byId.has(id)) {
+    state.scene.goTo(state.lay.positions[state.marks.findIndex((m) => m.id === id)].x, { instant: true });
+    bringIntoView(id);
+    return true;
+  }
+  const raw = params.get("t");
+  if (raw) {
+    const t = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
+    if (Number.isFinite(t)) {
+      state.scene.goTo(xForTime(t), { instant: true });
+      const i = indexNear(xForTime(t));
+      if (i >= 0) bringIntoView(state.marks[i].id);
+      return true;
+    }
+  }
+  return false;
+}
+window.addEventListener("hashchange", openHash);
 
 buildPalette();
 loadPad();
